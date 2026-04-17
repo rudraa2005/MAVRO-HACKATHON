@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+import click
+from flask import Flask, current_app
+
+from backend.extensions import db
+from backend.models import RoadSegment
+from backend.services.osm_ingestion import osm_ingestion_service
+from backend.simulation.engine import simulation_engine
+
+
+def register_cli_commands(app: Flask) -> None:
+    @app.cli.command("init-db")
+    def init_db_command() -> None:
+        db.create_all()
+        click.echo("Database tables are ready.")
+
+    @app.cli.command("ingest-osm")
+    @click.option("--query", default=None, help="Place or street query to ingest.")
+    @click.option(
+        "--query-type",
+        default="auto",
+        type=click.Choice(["auto", "place"], case_sensitive=False),
+        help="Use place-wide ingestion or a geocoded street-area ingest.",
+    )
+    @click.option("--radius-m", default=700, type=int, help="Radius for street-area ingest.")
+    @click.option("--reset/--no-reset", default=False, help="Replace existing data.")
+    def ingest_osm_command(
+        query: str | None,
+        query_type: str,
+        radius_m: int,
+        reset: bool,
+    ) -> None:
+        summary = bootstrap_input_layer(
+            query=query,
+            query_type=query_type,
+            radius_m=radius_m,
+            reset=reset,
+        )
+        click.echo(f"Ingestion complete: {summary}")
+
+    @app.cli.command("seed-simulation")
+    def seed_simulation_command() -> None:
+        simulation_engine.start(current_app._get_current_object(), force=True)
+        click.echo("Simulation engine is running.")
+
+
+def bootstrap_input_layer(
+    query: str | None = None,
+    query_type: str = "auto",
+    radius_m: int = 700,
+    reset: bool = False,
+) -> dict:
+    db.create_all()
+    app = current_app._get_current_object()
+    was_running = simulation_engine.is_running()
+    if was_running:
+        simulation_engine.stop()
+
+    target_query = query or current_app.config["FLOWGUARD_PLACE"]
+    try:
+        summary = osm_ingestion_service.ingest_query(
+            query=target_query,
+            query_type=query_type,
+            radius_m=radius_m,
+            reset=reset,
+        )
+    except Exception:
+        simulation_engine.refresh_network(app)
+        if was_running:
+            simulation_engine.start(app, force=True)
+        raise
+
+    simulation_engine.refresh_network(app)
+    if was_running:
+        simulation_engine.start(app, force=True)
+    else:
+        simulation_engine.clear_fleet(app)
+
+    summary["simulation_running"] = simulation_engine.is_running()
+    return summary
+
+
+def ensure_input_data(app: Flask) -> None:
+    with app.app_context():
+        if RoadSegment.query.first() is None and app.config["AUTO_INGEST"]:
+            bootstrap_input_layer(
+                query=app.config["FLOWGUARD_PLACE"],
+                query_type="place",
+                radius_m=700,
+                reset=False,
+            )
