@@ -11,6 +11,7 @@
     --poi: #ffd166;
     --vehicle: #60a5fa;
     --success: #2dd4bf;
+    --snapped: #a78bfa;
     --shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
 }
 
@@ -183,6 +184,60 @@ button:disabled {
     font-size: 0.88rem;
 }
 
+.candidate-meta {
+    margin: 0 0 12px;
+    color: var(--muted);
+    font-size: 0.88rem;
+    line-height: 1.45;
+}
+
+.search-results {
+    margin: 14px 0 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 10px;
+}
+
+.search-results li {
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    transition: border-color 160ms ease, background 160ms ease;
+}
+
+.search-results li.selected {
+    border-color: rgba(86, 213, 255, 0.48);
+    background: rgba(86, 213, 255, 0.1);
+}
+
+.candidate-button {
+    width: 100%;
+    text-align: left;
+    border-radius: 16px;
+    padding: 14px;
+    color: var(--text);
+    background: transparent;
+    box-shadow: none;
+}
+
+.candidate-button:hover {
+    transform: none;
+}
+
+.candidate-title {
+    display: block;
+    font-weight: 700;
+}
+
+.candidate-subtitle {
+    display: block;
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 0.84rem;
+    line-height: 1.45;
+}
+
 .status-pill {
     margin: 0;
     padding: 10px 14px;
@@ -195,7 +250,7 @@ button:disabled {
 
 .stats-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 18px;
     margin-top: 20px;
 }
@@ -383,6 +438,43 @@ button:disabled {
 
 .legend-wrong {
     background: var(--danger);
+}
+
+.legend-snapped {
+    background: var(--snapped);
+}
+
+@keyframes snap-pulse {
+    0%, 100% { opacity: 0.85; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.35); }
+}
+
+.snap-low-confidence {
+    animation: snap-pulse 1.6s ease-in-out infinite;
+}
+
+.confidence-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.78rem;
+    font-weight: 500;
+}
+
+.confidence-high {
+    background: rgba(45, 212, 191, 0.18);
+    color: var(--success);
+}
+
+.confidence-mid {
+    background: rgba(255, 183, 3, 0.18);
+    color: var(--accent-strong);
+}
+
+.confidence-low {
+    background: rgba(255, 93, 115, 0.18);
+    color: var(--danger);
 }
 
 .leaflet-container {

@@ -46,8 +46,10 @@
                             <option value="1500">1500 m</option>
                         </select>
                     </label>
+                    <p id="candidate-meta" class="candidate-meta">Search for a location, then choose the exact match to load.</p>
                     <div class="button-row">
-                        <button id="load-street" type="button">Load Street Area</button>
+                        <button id="search-locations" type="button">Find Matches</button>
+                        <button id="load-street" type="button">Load Selected</button>
                         <button id="start-simulation" type="button" class="secondary-button">Start Simulation</button>
                         <button id="stop-simulation" type="button" class="secondary-button">Stop Simulation</button>
                         <button id="run-wrong-way" type="button" class="secondary-button">Trigger Wrong-Way</button>
@@ -57,6 +59,7 @@
                         <button type="button" class="preset-button" data-query="George Town, Chennai, Tamil Nadu, India">Parry's Corner</button>
                         <button type="button" class="preset-button" data-query="T. Nagar, Chennai, Tamil Nadu, India">T Nagar</button>
                     </div>
+                    <ul id="search-results" class="search-results"></ul>
                 </div>
                 <p id="status-pill" class="status-pill">Waiting for first sync</p>
             </div>
@@ -79,6 +82,14 @@
                 <span>POIs</span>
                 <strong id="pois-count">0</strong>
             </article>
+            <article class="stat-card">
+                <span>Match Rate</span>
+                <strong id="match-rate">—</strong>
+            </article>
+            <article class="stat-card">
+                <span>DI Violations</span>
+                <strong id="di-violations">0</strong>
+            </article>
         </section>
 
         <section class="content-grid">
@@ -93,6 +104,7 @@
                         <span><i class="legend-poi"></i> POIs</span>
                         <span><i class="legend-vehicle"></i> Vehicles</span>
                         <span><i class="legend-wrong"></i> Wrong-Way</span>
+                        <span><i class="legend-snapped"></i> Snapped</span>
                     </div>
                 </div>
                 <div class="map-wrap">
@@ -161,6 +173,8 @@
                         <li><code>GET /api/vehicles/history</code></li>
                         <li><code>GET /api/pois</code></li>
                         <li><code>GET /api/summary</code></li>
+                        <li><code>GET /api/map-match/live</code></li>
+                        <li><code>GET /api/direction/live</code></li>
                     </ul>
                 </article>
             </aside>

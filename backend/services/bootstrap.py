@@ -5,6 +5,7 @@ from flask import Flask, current_app
 
 from backend.extensions import db
 from backend.models import RoadSegment
+from backend.services.map_matching import map_matching_service
 from backend.services.osm_ingestion import osm_ingestion_service
 from backend.simulation.engine import simulation_engine
 
@@ -44,12 +45,30 @@ def register_cli_commands(app: Flask) -> None:
         simulation_engine.start(current_app._get_current_object(), force=True)
         click.echo("Simulation engine is running.")
 
+    @app.cli.command("benchmark-map-matching")
+    @click.option("--points", default=1000, type=int, help="Number of points to score.")
+    @click.option("--candidate-limit", default=5, type=int, help="Nearby road candidates per point.")
+    @click.option("--distance-threshold-m", default=30.0, type=float, help="Max snap distance in meters.")
+    def benchmark_map_matching_command(
+        points: int,
+        candidate_limit: int,
+        distance_threshold_m: float,
+    ) -> None:
+        result = map_matching_service.benchmark(
+            points_count=max(1, min(points, 10000)),
+            candidate_limit=candidate_limit,
+            distance_threshold_m=distance_threshold_m,
+            max_jump_speed_mps=current_app.config["MAP_MATCH_MAX_JUMP_SPEED_MPS"],
+        )
+        click.echo(f"Map matching benchmark: {result}")
+
 
 def bootstrap_input_layer(
     query: str | None = None,
     query_type: str = "auto",
     radius_m: int = 700,
     reset: bool = False,
+    selection: dict | None = None,
 ) -> dict:
     db.create_all()
     app = current_app._get_current_object()
@@ -64,6 +83,7 @@ def bootstrap_input_layer(
             query_type=query_type,
             radius_m=radius_m,
             reset=reset,
+            selection=selection,
         )
     except Exception:
         simulation_engine.refresh_network(app)
@@ -72,6 +92,7 @@ def bootstrap_input_layer(
         raise
 
     simulation_engine.refresh_network(app)
+    map_matching_service.invalidate_cache()
     if was_running:
         simulation_engine.start(app, force=True)
     else:
