@@ -82,6 +82,14 @@
                 <span>POIs</span>
                 <strong id="pois-count">0</strong>
             </article>
+            <article class="stat-card">
+                <span>Match Rate</span>
+                <strong id="match-rate">—</strong>
+            </article>
+            <article class="stat-card">
+                <span>DI Violations</span>
+                <strong id="di-violations">0</strong>
+            </article>
         </section>
 
         <section class="content-grid">
@@ -96,6 +104,7 @@
                         <span><i class="legend-poi"></i> POIs</span>
                         <span><i class="legend-vehicle"></i> Vehicles</span>
                         <span><i class="legend-wrong"></i> Wrong-Way</span>
+                        <span><i class="legend-snapped"></i> Snapped</span>
                     </div>
                 </div>
                 <div class="map-wrap">
@@ -164,6 +173,8 @@
                         <li><code>GET /api/vehicles/history</code></li>
                         <li><code>GET /api/pois</code></li>
                         <li><code>GET /api/summary</code></li>
+                        <li><code>GET /api/map-match/live</code></li>
+                        <li><code>GET /api/direction/live</code></li>
                     </ul>
                 </article>
             </aside>

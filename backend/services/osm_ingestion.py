@@ -7,6 +7,11 @@ from typing import Any
 from shapely.geometry import LineString, Point
 from shapely.strtree import STRtree
 
+from backend.models.road import _USE_POSTGIS
+
+if _USE_POSTGIS:
+    from geoalchemy2.shape import from_shape
+
 from backend.extensions import db
 from backend.models import POI, RoadSegment, Vehicle, VehicleHistory
 from backend.services.geo import (
@@ -156,6 +161,12 @@ class OSMIngestionService:
                 getattr(row, "maxspeed", None),
                 road_class,
             )
+            geom_kwargs = {}
+            if _USE_POSTGIS:
+                geom_kwargs["geom"] = from_shape(
+                    LineString([(p["lon"], p["lat"]) for p in path]),
+                    srid=4326,
+                )
             segments.append(
                 RoadSegment(
                     osm_way_id=self._safe_int(getattr(row, "osmid", None)),
@@ -176,6 +187,7 @@ class OSMIngestionService:
                     geometry=path,
                     road_class=road_class,
                     speed_limit_mps=speed_limit_mps,
+                    **geom_kwargs,
                 )
             )
         return segments

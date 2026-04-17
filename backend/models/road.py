@@ -1,6 +1,14 @@
 from __future__ import annotations
 
+import os
+
 from backend.extensions import db
+
+_DB_URL = os.getenv("DATABASE_URL", "")
+_USE_POSTGIS = "postgresql" in _DB_URL or "postgres" in _DB_URL
+
+if _USE_POSTGIS:
+    from geoalchemy2 import Geometry
 
 
 class RoadSegment(db.Model):
@@ -18,6 +26,11 @@ class RoadSegment(db.Model):
     oneway = db.Column(db.Boolean, nullable=False, default=False)
     length_m = db.Column(db.Float, nullable=False)
     geometry = db.Column(db.JSON, nullable=False)
+    if _USE_POSTGIS:
+        geom = db.Column(
+            Geometry("LINESTRING", srid=4326, spatial_index=True),
+            nullable=True,
+        )
     road_class = db.Column(db.String(64), nullable=True)
     speed_limit_mps = db.Column(db.Float, nullable=True)
     poi_density = db.Column(db.Float, nullable=False, default=0.0)
@@ -38,3 +51,4 @@ class RoadSegment(db.Model):
             "poi_density": self.poi_density,
             "geometry": self.geometry,
         }
+

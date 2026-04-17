@@ -3,9 +3,14 @@ const state = {
   roadsLayer: null,
   poisLayer: null,
   vehicleLayer: null,
+  snappedLayer: null,
   scenarioLayer: null,
   vehicleMarkers: new Map(),
+  snappedMarkers: new Map(),
+  snapLines: new Map(),
   roadsById: new Map(),
+  lastMatchData: new Map(),
+  lastDirectionData: new Map(),
   hasSuccessfulSync: false,
   syncFailures: 0,
   pollHandle: null,
@@ -47,6 +52,7 @@ function initMap() {
   state.roadsLayer = L.layerGroup().addTo(state.map);
   state.poisLayer = L.layerGroup().addTo(state.map);
   state.vehicleLayer = L.layerGroup().addTo(state.map);
+  state.snappedLayer = L.layerGroup().addTo(state.map);
   state.scenarioLayer = L.layerGroup().addTo(state.map);
 }
 
@@ -96,6 +102,28 @@ function updateCounts(summary) {
   updateSimulationButtons(Boolean(summary.simulation_running));
 }
 
+function confidenceClass(score) {
+  if (score >= 0.7) return "confidence-high";
+  if (score >= 0.4) return "confidence-mid";
+  return "confidence-low";
+}
+
+function confidenceLabel(score) {
+  if (score >= 0.7) return "high";
+  if (score >= 0.4) return "mid";
+  return "low";
+}
+
+function updateMatchRate(matchStats) {
+  const el = document.getElementById("match-rate");
+  if (!matchStats || !matchStats.points) {
+    el.textContent = "\u2014";
+    return;
+  }
+  const pct = ((matchStats.matched / matchStats.points) * 100).toFixed(0);
+  el.textContent = `${pct}%`;
+}
+
 function updateWrongWayList(vehicles) {
   const list = document.getElementById("wrong-way-list");
   const wrongWayVehicles = vehicles.filter((vehicle) => vehicle.wrong_way);
@@ -108,7 +136,23 @@ function updateWrongWayList(vehicles) {
   list.innerHTML = wrongWayVehicles
     .map((vehicle) => {
       const speed = Number(vehicle.speed || 0).toFixed(1);
-      return `<li>Vehicle #${vehicle.id} moving at ${speed} m/s on segment ${vehicle.road_segment_id}</li>`;
+      const matchInfo = state.lastMatchData.get(vehicle.id);
+      const diInfo = state.lastDirectionData.get(vehicle.id);
+      let extra = "";
+      if (matchInfo && matchInfo.confidence_score != null) {
+        const conf = matchInfo.confidence_score;
+        const cls = confidenceClass(conf);
+        extra = ` &bull; <span class="confidence-badge ${cls}">${(conf * 100).toFixed(0)}% snap</span>`;
+      }
+      if (diInfo && diInfo.wrong_way_probability != null) {
+        const wwp = diInfo.wrong_way_probability;
+        const cls = wwp >= 0.65 ? "confidence-low" : wwp >= 0.35 ? "confidence-mid" : "confidence-high";
+        extra += ` &bull; <span class="confidence-badge ${cls}">${(wwp * 100).toFixed(0)}% WWP</span>`;
+        if (diInfo.is_violation) {
+          extra += ` <span class="confidence-badge confidence-low">VIOLATION</span>`;
+        }
+      }
+      return `<li>Vehicle #${vehicle.id} &mdash; ${speed} m/s on seg ${vehicle.road_segment_id}${extra}</li>`;
     })
     .join("");
 }
@@ -122,7 +166,22 @@ function clearVehicleMarkers() {
     state.vehicleLayer.removeLayer(marker);
   });
   state.vehicleMarkers.clear();
+  clearSnappedMarkers();
   updateWrongWayList([]);
+}
+
+function clearSnappedMarkers() {
+  [...state.snappedMarkers.values()].forEach((marker) => {
+    state.snappedLayer.removeLayer(marker);
+  });
+  state.snappedMarkers.clear();
+
+  [...state.snapLines.values()].forEach((line) => {
+    state.snappedLayer.removeLayer(line);
+  });
+  state.snapLines.clear();
+
+  state.lastMatchData.clear();
 }
 
 function clearScenarioOverlay() {
@@ -266,7 +325,7 @@ function renderPois(pois) {
   });
 }
 
-function renderVehicles(vehicles) {
+function renderVehicles(vehicles, matchMap) {
   const seen = new Set();
   vehicles.forEach((vehicle) => {
     seen.add(vehicle.id);
@@ -291,15 +350,51 @@ function renderVehicles(vehicles) {
       fillColor: color,
       radius: vehicle.wrong_way ? 6 : 5,
     });
-    marker.bindPopup(
-      `<strong>Vehicle #${vehicle.id}</strong><br>Speed: ${Number(
-        vehicle.speed || 0
-      ).toFixed(1)} m/s<br>Bearing: ${Number(vehicle.bearing || 0).toFixed(
-        1
-      )}°<br>Segment: ${vehicle.road_segment_id}<br>Wrong-way: ${
-        vehicle.wrong_way ? "yes" : "no"
-      }`
-    );
+
+    const match = matchMap ? matchMap.get(vehicle.id) : null;
+    let popupContent = `<strong>Vehicle #${vehicle.id}</strong><br>Speed: ${Number(
+      vehicle.speed || 0
+    ).toFixed(1)} m/s<br>Bearing: ${Number(vehicle.bearing || 0).toFixed(
+      1
+    )}°<br>Segment: ${vehicle.road_segment_id}<br>Wrong-way: ${
+      vehicle.wrong_way ? "yes" : "no"
+    }`;
+
+    if (match && match.matched_edge_id != null) {
+      const conf = match.confidence_score;
+      const cls = confidenceClass(conf);
+      popupContent += `<br><br><strong>Map-Match</strong>`;
+      popupContent += `<br>Confidence: <span class="confidence-badge ${cls}">${(conf * 100).toFixed(0)}%</span>`;
+      popupContent += `<br>Matched edge: ${match.matched_edge_id}`;
+      if (match.distance_error != null) {
+        popupContent += `<br>Snap distance: ${match.distance_error.toFixed(2)} m`;
+      }
+      if (match.heading_diff != null) {
+        popupContent += `<br>Heading Δ: ${match.heading_diff.toFixed(1)}°`;
+      }
+      if (match.matched_bearing != null) {
+        popupContent += `<br>Road bearing: ${match.matched_bearing.toFixed(1)}°`;
+      }
+    } else if (match && match.rejected_reason) {
+      popupContent += `<br><br><em>Match rejected: ${match.rejected_reason}</em>`;
+    }
+
+    // Direction Intelligence data
+    const di = matchMap ? state.lastDirectionData.get(vehicle.id) : null;
+    if (di && di.motion_vector) {
+      const wwp = di.wrong_way_probability;
+      const wwpCls = wwp >= 0.65 ? "confidence-low" : wwp >= 0.35 ? "confidence-mid" : "confidence-high";
+      popupContent += `<br><br><strong>Direction Intelligence</strong>`;
+      popupContent += `<br>Similarity: ${di.direction_similarity.toFixed(3)}`;
+      popupContent += `<br>WWP: <span class="confidence-badge ${wwpCls}">${(wwp * 100).toFixed(0)}%</span>`;
+      popupContent += `<br>Confidence: ${(di.confidence * 100).toFixed(0)}%`;
+      if (di.is_violation) {
+        popupContent += `<br><span class="confidence-badge confidence-low">⚠ VIOLATION DETECTED</span>`;
+      }
+      popupContent += `<br><small>window: ${di.window_size} • var: ${di.variance.toFixed(4)}</small>`;
+    }
+
+    marker.bindPopup(popupContent);
   });
 
   [...state.vehicleMarkers.entries()].forEach(([vehicleId, marker]) => {
@@ -311,6 +406,82 @@ function renderVehicles(vehicles) {
   });
 
   updateWrongWayList(vehicles);
+}
+
+function renderSnappedPoints(vehicles, matchMap) {
+  const seenSnapped = new Set();
+
+  vehicles.forEach((vehicle) => {
+    const match = matchMap ? matchMap.get(vehicle.id) : null;
+    if (!match || !match.snapped_point || match.matched_edge_id == null) {
+      // Remove stale snapped marker for this vehicle
+      const oldMarker = state.snappedMarkers.get(vehicle.id);
+      if (oldMarker) {
+        state.snappedLayer.removeLayer(oldMarker);
+        state.snappedMarkers.delete(vehicle.id);
+      }
+      const oldLine = state.snapLines.get(vehicle.id);
+      if (oldLine) {
+        state.snappedLayer.removeLayer(oldLine);
+        state.snapLines.delete(vehicle.id);
+      }
+      return;
+    }
+
+    seenSnapped.add(vehicle.id);
+    const snappedLatLng = [match.snapped_point[0], match.snapped_point[1]];
+    const vehicleLatLng = [vehicle.lat, vehicle.lon];
+    const conf = match.confidence_score;
+    const isLow = conf < 0.4;
+    const snappedColor = "#a78bfa";
+
+    // Snapped point marker
+    let sMarker = state.snappedMarkers.get(vehicle.id);
+    if (!sMarker) {
+      sMarker = L.circleMarker(snappedLatLng, {
+        radius: 4,
+        color: snappedColor,
+        fillColor: snappedColor,
+        fillOpacity: 0.92,
+        weight: 1.5,
+        className: isLow ? "snap-low-confidence" : "",
+      }).addTo(state.snappedLayer);
+      state.snappedMarkers.set(vehicle.id, sMarker);
+    }
+    sMarker.setLatLng(snappedLatLng);
+    sMarker.setStyle({
+      className: isLow ? "snap-low-confidence" : "",
+    });
+
+    // Snap line connecting raw GPS to snapped point
+    let sLine = state.snapLines.get(vehicle.id);
+    if (!sLine) {
+      sLine = L.polyline([vehicleLatLng, snappedLatLng], {
+        color: snappedColor,
+        weight: 1.5,
+        opacity: 0.55,
+        dashArray: "4 6",
+      }).addTo(state.snappedLayer);
+      state.snapLines.set(vehicle.id, sLine);
+    }
+    sLine.setLatLngs([vehicleLatLng, snappedLatLng]);
+  });
+
+  // Remove snapped markers for vehicles that no longer exist
+  [...state.snappedMarkers.keys()].forEach((vid) => {
+    if (!seenSnapped.has(vid)) {
+      const m = state.snappedMarkers.get(vid);
+      if (m) state.snappedLayer.removeLayer(m);
+      state.snappedMarkers.delete(vid);
+    }
+  });
+  [...state.snapLines.keys()].forEach((vid) => {
+    if (!seenSnapped.has(vid)) {
+      const l = state.snapLines.get(vid);
+      if (l) state.snappedLayer.removeLayer(l);
+      state.snapLines.delete(vid);
+    }
+  });
 }
 
 function highlightScenario(result) {
@@ -341,15 +512,55 @@ async function refreshSnapshot() {
       updateStatus("Syncing backend state...");
     }
 
-    const [summary, vehicles] = await Promise.all([
+    const [summary, vehicles, directionResult] = await Promise.all([
       requestJSON("/api/summary"),
       requestJSON("/api/vehicles"),
+      requestJSON("/api/direction/live").catch(() => null),
     ]);
 
     state.hasSuccessfulSync = true;
     state.syncFailures = 0;
     updateCounts(summary);
-    renderVehicles(vehicles);
+
+    // Build match lookup map: vehicle_id -> match result
+    const matchMap = new Map();
+    state.lastMatchData.clear();
+    state.lastDirectionData.clear();
+
+    // Direction endpoint returns both matches and direction results
+    const mapMatchResult = directionResult;
+    if (mapMatchResult && mapMatchResult.matches) {
+      for (const match of mapMatchResult.matches) {
+        const vid = match.vehicle_id;
+        if (vid != null) {
+          matchMap.set(vid, match);
+          state.lastMatchData.set(vid, match);
+        }
+      }
+    }
+    if (directionResult && directionResult.direction) {
+      for (const di of directionResult.direction) {
+        const vid = di.vehicle_id;
+        if (vid != null) {
+          state.lastDirectionData.set(vid, di);
+        }
+      }
+    }
+
+    // Update match rate stat card
+    if (mapMatchResult && mapMatchResult.stats && mapMatchResult.stats.match_stats) {
+      updateMatchRate(mapMatchResult.stats.match_stats);
+    }
+
+    // Update DI violations stat card
+    if (directionResult && directionResult.stats) {
+      const viEl = document.getElementById("di-violations");
+      if (viEl) viEl.textContent = directionResult.stats.violations ?? 0;
+    }
+
+    renderVehicles(vehicles, matchMap);
+    renderSnappedPoints(vehicles, matchMap);
+
     document.getElementById("last-update").textContent =
       new Date().toLocaleTimeString();
 
@@ -532,6 +743,7 @@ async function stopSimulation() {
       headers: { "Content-Type": "application/json" },
     });
     clearScenarioOverlay();
+    clearSnappedMarkers();
     await refreshSnapshot();
     updateStatus("Simulation stopped.", "neutral");
   } catch (error) {

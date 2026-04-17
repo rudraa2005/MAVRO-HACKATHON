@@ -11,6 +11,7 @@
     --poi: #ffd166;
     --vehicle: #60a5fa;
     --success: #2dd4bf;
+    --snapped: #a78bfa;
     --shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
 }
 
@@ -249,7 +250,7 @@ button:disabled {
 
 .stats-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 18px;
     margin-top: 20px;
 }
@@ -437,6 +438,43 @@ button:disabled {
 
 .legend-wrong {
     background: var(--danger);
+}
+
+.legend-snapped {
+    background: var(--snapped);
+}
+
+@keyframes snap-pulse {
+    0%, 100% { opacity: 0.85; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.35); }
+}
+
+.snap-low-confidence {
+    animation: snap-pulse 1.6s ease-in-out infinite;
+}
+
+.confidence-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.78rem;
+    font-weight: 500;
+}
+
+.confidence-high {
+    background: rgba(45, 212, 191, 0.18);
+    color: var(--success);
+}
+
+.confidence-mid {
+    background: rgba(255, 183, 3, 0.18);
+    color: var(--accent-strong);
+}
+
+.confidence-low {
+    background: rgba(255, 93, 115, 0.18);
+    color: var(--danger);
 }
 
 .leaflet-container {

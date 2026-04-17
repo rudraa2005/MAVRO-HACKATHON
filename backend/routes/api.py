@@ -4,6 +4,7 @@ from flask import Blueprint, current_app, jsonify, request
 
 from backend.models import POI, RoadSegment, Vehicle, VehicleHistory
 from backend.services.bootstrap import bootstrap_input_layer
+from backend.services.direction_intelligence import direction_intelligence_service
 from backend.services.input_layer import FlowGuardInputLayer
 from backend.services.map_matching import map_matching_service
 from backend.services.osm_ingestion import IngestionError, osm_ingestion_service
@@ -213,6 +214,7 @@ def admin_stop_simulation():
     simulation_engine.stop()
     simulation_engine.clear_fleet(current_app._get_current_object())
     map_matching_service.invalidate_cache()
+    direction_intelligence_service.invalidate_cache()
     return jsonify(
         {
             "simulation_running": simulation_engine.is_running(),
@@ -271,3 +273,31 @@ def admin_wrong_way_scenario():
         return jsonify({"error": str(exc)}), 400
 
     return jsonify(result), 202
+
+
+@api_bp.get("/direction/live")
+def direction_live():
+    candidate_limit = request.args.get(
+        "candidate_limit",
+        default=current_app.config["MAP_MATCH_CANDIDATE_LIMIT"],
+        type=int,
+    )
+    distance_threshold_m = request.args.get(
+        "distance_threshold_m",
+        default=current_app.config["MAP_MATCH_DISTANCE_THRESHOLD_M"],
+        type=float,
+    )
+    max_jump_speed_mps = request.args.get(
+        "max_jump_speed_mps",
+        default=current_app.config["MAP_MATCH_MAX_JUMP_SPEED_MPS"],
+        type=float,
+    )
+    limit = request.args.get("limit", type=int)
+    return jsonify(
+        direction_intelligence_service.analyze_live_vehicles(
+            candidate_limit=candidate_limit,
+            distance_threshold_m=distance_threshold_m,
+            max_jump_speed_mps=max_jump_speed_mps,
+            limit=limit,
+        )
+    )
