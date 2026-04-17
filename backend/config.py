@@ -51,3 +51,10 @@ class Config:
     GPS_NOISE_METERS = float(os.getenv("GPS_NOISE_METERS", "6.0"))
     SIMULATION_RANDOM_SEED = int(os.getenv("SIMULATION_RANDOM_SEED", "42"))
     FRONTEND_POLL_INTERVAL_MS = int(os.getenv("FRONTEND_POLL_INTERVAL_MS", "1000"))
+    MAP_MATCH_CANDIDATE_LIMIT = int(os.getenv("MAP_MATCH_CANDIDATE_LIMIT", "5"))
+    MAP_MATCH_DISTANCE_THRESHOLD_M = float(
+        os.getenv("MAP_MATCH_DISTANCE_THRESHOLD_M", "30.0")
+    )
+    MAP_MATCH_MAX_JUMP_SPEED_MPS = float(
+        os.getenv("MAP_MATCH_MAX_JUMP_SPEED_MPS", "60.0")
+    )
