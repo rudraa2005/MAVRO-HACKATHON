@@ -50,6 +50,7 @@ def bootstrap_input_layer(
     query_type: str = "auto",
     radius_m: int = 700,
     reset: bool = False,
+    selection: dict | None = None,
 ) -> dict:
     db.create_all()
     app = current_app._get_current_object()
@@ -64,6 +65,7 @@ def bootstrap_input_layer(
             query_type=query_type,
             radius_m=radius_m,
             reset=reset,
+            selection=selection,
         )
     except Exception:
         simulation_engine.refresh_network(app)

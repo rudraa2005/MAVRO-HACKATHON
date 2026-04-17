@@ -183,6 +183,60 @@ button:disabled {
     font-size: 0.88rem;
 }
 
+.candidate-meta {
+    margin: 0 0 12px;
+    color: var(--muted);
+    font-size: 0.88rem;
+    line-height: 1.45;
+}
+
+.search-results {
+    margin: 14px 0 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 10px;
+}
+
+.search-results li {
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    transition: border-color 160ms ease, background 160ms ease;
+}
+
+.search-results li.selected {
+    border-color: rgba(86, 213, 255, 0.48);
+    background: rgba(86, 213, 255, 0.1);
+}
+
+.candidate-button {
+    width: 100%;
+    text-align: left;
+    border-radius: 16px;
+    padding: 14px;
+    color: var(--text);
+    background: transparent;
+    box-shadow: none;
+}
+
+.candidate-button:hover {
+    transform: none;
+}
+
+.candidate-title {
+    display: block;
+    font-weight: 700;
+}
+
+.candidate-subtitle {
+    display: block;
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 0.84rem;
+    line-height: 1.45;
+}
+
 .status-pill {
     margin: 0;
     padding: 10px 14px;

@@ -46,8 +46,10 @@
                             <option value="1500">1500 m</option>
                         </select>
                     </label>
+                    <p id="candidate-meta" class="candidate-meta">Search for a location, then choose the exact match to load.</p>
                     <div class="button-row">
-                        <button id="load-street" type="button">Load Street Area</button>
+                        <button id="search-locations" type="button">Find Matches</button>
+                        <button id="load-street" type="button">Load Selected</button>
                         <button id="start-simulation" type="button" class="secondary-button">Start Simulation</button>
                         <button id="stop-simulation" type="button" class="secondary-button">Stop Simulation</button>
                         <button id="run-wrong-way" type="button" class="secondary-button">Trigger Wrong-Way</button>
@@ -57,6 +59,7 @@
                         <button type="button" class="preset-button" data-query="George Town, Chennai, Tamil Nadu, India">Parry's Corner</button>
                         <button type="button" class="preset-button" data-query="T. Nagar, Chennai, Tamil Nadu, India">T Nagar</button>
                     </div>
+                    <ul id="search-results" class="search-results"></ul>
                 </div>
                 <p id="status-pill" class="status-pill">Waiting for first sync</p>
             </div>

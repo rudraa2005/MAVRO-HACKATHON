@@ -5,7 +5,7 @@ from flask import Blueprint, current_app, jsonify, request
 from backend.models import POI, RoadSegment, Vehicle, VehicleHistory
 from backend.services.bootstrap import bootstrap_input_layer
 from backend.services.input_layer import FlowGuardInputLayer
-from backend.services.osm_ingestion import IngestionError
+from backend.services.osm_ingestion import IngestionError, osm_ingestion_service
 from backend.simulation.engine import simulation_engine
 
 
@@ -86,16 +86,31 @@ def admin_bootstrap():
     query_type = payload.get("query_type", "auto")
     radius_m = int(payload.get("radius_m", 700))
     reset = bool(payload.get("reset", False))
+    selection = payload.get("selection")
     try:
         summary = bootstrap_input_layer(
             query=query,
             query_type=query_type,
             radius_m=radius_m,
             reset=reset,
+            selection=selection,
         )
     except IngestionError as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify(summary), 202
+
+
+@api_bp.post("/admin/location-search")
+def admin_location_search():
+    payload = request.get_json(silent=True) or {}
+    query = str(payload.get("query") or "").strip()
+    limit = max(1, min(int(payload.get("limit", 5)), 8))
+    try:
+        result = osm_ingestion_service.search_candidates(query=query, limit=limit)
+    except IngestionError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify(result), 200
 
 
 @api_bp.post("/admin/simulation/start")

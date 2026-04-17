@@ -9,6 +9,8 @@ const state = {
   hasSuccessfulSync: false,
   syncFailures: 0,
   pollHandle: null,
+  searchCandidates: [],
+  selectedCandidateId: null,
 };
 
 const pollIntervalMs = Number(document.body.dataset.pollIntervalMs || 1000);
@@ -111,6 +113,10 @@ function updateWrongWayList(vehicles) {
     .join("");
 }
 
+function updateCandidateMeta(message) {
+  document.getElementById("candidate-meta").textContent = message;
+}
+
 function clearVehicleMarkers() {
   [...state.vehicleMarkers.values()].forEach((marker) => {
     state.vehicleLayer.removeLayer(marker);
@@ -131,6 +137,68 @@ function clearMapForReload() {
   state.roadsById = new Map();
 }
 
+function clearSearchState(message = "Search for a location, then choose the exact match to load.") {
+  state.searchCandidates = [];
+  state.selectedCandidateId = null;
+  renderSearchResults();
+  updateCandidateMeta(message);
+}
+
+function getSelectedCandidate() {
+  return (
+    state.searchCandidates.find((candidate) => candidate.id === state.selectedCandidateId) ||
+    null
+  );
+}
+
+function setSelectedCandidate(candidateId) {
+  state.selectedCandidateId = candidateId;
+  renderSearchResults();
+  const candidate = getSelectedCandidate();
+  if (!candidate) {
+    updateCandidateMeta("Search for a location, then choose the exact match to load.");
+    return;
+  }
+
+  updateCandidateMeta(
+    `Selected: ${candidate.display_name} (${candidate.match_mode} match, ${candidate.geometry_type}).`
+  );
+}
+
+function renderSearchResults() {
+  const list = document.getElementById("search-results");
+  list.innerHTML = "";
+
+  if (!state.searchCandidates.length) {
+    return;
+  }
+
+  state.searchCandidates.forEach((candidate) => {
+    const item = document.createElement("li");
+    if (candidate.id === state.selectedCandidateId) {
+      item.classList.add("selected");
+    }
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "candidate-button";
+    button.innerHTML = `
+      <span class="candidate-title">${candidate.display_name}</span>
+      <span class="candidate-subtitle">
+        ${candidate.match_mode} match • ${candidate.geometry_type} • ${Number(
+          candidate.lat
+        ).toFixed(5)}, ${Number(candidate.lon).toFixed(5)}
+      </span>
+    `;
+    button.addEventListener("click", () => {
+      setSelectedCandidate(candidate.id);
+    });
+
+    item.appendChild(button);
+    list.appendChild(item);
+  });
+}
+
 function renderRoads(roads) {
   state.roadsLayer.clearLayers();
   state.roadsById = new Map();
@@ -138,7 +206,7 @@ function renderRoads(roads) {
   if (!roads.length) {
     setMapEmptyState(
       true,
-      'Use "Load Street Area" with a place like "Anna Salai, Chennai, Tamil Nadu, India" to ingest roads and start the simulation.'
+      'Use "Find Matches" with a place like "Anna Salai, Chennai, Tamil Nadu, India" to search and load a street area.'
     );
     return;
   }
@@ -288,7 +356,7 @@ async function refreshSnapshot() {
     if (!summary.has_data) {
       setMapEmptyState(
         true,
-        'Use "Load Street Area" with a place like "Anna Salai, Chennai, Tamil Nadu, India" to ingest roads and start the simulation.'
+        'Use "Find Matches" with a place like "Anna Salai, Chennai, Tamil Nadu, India" to search and load a street area.'
       );
       updateStatus("No road network loaded yet.", "neutral");
       return;
@@ -335,44 +403,104 @@ async function loadStaticLayers() {
   }
 }
 
-async function loadStreetArea() {
+async function searchLocations() {
   const query = document.getElementById("scenario-query").value.trim();
-  const radiusM = Number(document.getElementById("scenario-radius").value || 700);
   if (!query) {
-    updateStatus("Enter a street or area name first.", "error");
-    return;
+    updateStatus("Enter a street, neighborhood, or coordinates first.", "error");
+    return [];
   }
 
   try {
-    updateStatus(`Loading ${query}...`);
-    const result = await requestJSON("/api/admin/bootstrap", {
+    updateStatus(`Searching matches for ${query}...`);
+    const result = await requestJSON("/api/admin/location-search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         query,
+        limit: 5,
+      }),
+    });
+
+    state.searchCandidates = result.candidates || [];
+    state.selectedCandidateId =
+      state.searchCandidates.length === 1 ? state.searchCandidates[0].id : null;
+    renderSearchResults();
+
+    if (!state.searchCandidates.length) {
+      updateCandidateMeta("No matches found. Try a more specific query or direct coordinates.");
+      updateStatus(`No search matches found for ${query}.`, "error");
+      return [];
+    }
+
+    if (state.searchCandidates.length === 1) {
+      const onlyCandidate = state.searchCandidates[0];
+      updateCandidateMeta(
+        `One match found: ${onlyCandidate.display_name}. Ready to load.`
+      );
+      updateStatus("One match found. Load it when ready.", "success");
+      return state.searchCandidates;
+    }
+
+    updateCandidateMeta(
+      `Found ${state.searchCandidates.length} matches. Choose the one you want to load.`
+    );
+    updateStatus(`Found ${state.searchCandidates.length} possible matches.`, "neutral");
+    return state.searchCandidates;
+  } catch (error) {
+    console.error(error);
+    clearSearchState("Search failed. Try a more specific location or direct coordinates.");
+    updateStatus(`Location search failed: ${error.message}`, "error");
+    return [];
+  }
+}
+
+async function loadStreetArea() {
+  let candidate = getSelectedCandidate();
+  if (!candidate) {
+    const candidates = await searchLocations();
+    if (candidates.length !== 1) {
+      if (candidates.length > 1) {
+        updateStatus("Choose one of the search matches before loading.", "neutral");
+      }
+      return;
+    }
+    candidate = candidates[0];
+  }
+
+  const radiusM = Number(document.getElementById("scenario-radius").value || 700);
+
+  try {
+    updateStatus(`Loading ${candidate.display_name}...`);
+    const result = await requestJSON("/api/admin/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: candidate.display_name,
         query_type: "auto",
         radius_m: radiusM,
         reset: true,
+        selection: candidate,
       }),
     });
 
     clearMapForReload();
     document.getElementById("scenario-query").value =
-      result.resolved_query || query;
+      result.resolved_query || candidate.display_name;
+    updateCandidateMeta(`Loaded: ${result.resolved_query || candidate.display_name}.`);
 
     await loadStaticLayers();
     await refreshSnapshot();
 
     if (result.simulation_running) {
       updateStatus(
-        `Loaded ${result.road_segments} roads around ${result.resolved_query || query}.`,
+        `Loaded ${result.road_segments} roads around ${result.resolved_query || candidate.display_name}.`,
         "success"
       );
       return;
     }
 
     updateStatus(
-      `Loaded ${result.road_segments} roads around ${result.resolved_query || query}. Simulation is stopped; press Start Simulation when ready.`,
+      `Loaded ${result.road_segments} roads around ${result.resolved_query || candidate.display_name}. Simulation is stopped; press Start Simulation when ready.`,
       "neutral"
     );
   } catch (error) {
@@ -433,6 +561,9 @@ async function triggerWrongWayScenario() {
 }
 
 function bindControls() {
+  document
+    .getElementById("search-locations")
+    .addEventListener("click", searchLocations);
   document.getElementById("load-street").addEventListener("click", loadStreetArea);
   document
     .getElementById("start-simulation")
@@ -444,18 +575,21 @@ function bindControls() {
     .getElementById("run-wrong-way")
     .addEventListener("click", triggerWrongWayScenario);
 
-  document
-    .getElementById("scenario-query")
-    .addEventListener("keydown", async (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        await loadStreetArea();
-      }
-    });
+  document.getElementById("scenario-query").addEventListener("keydown", async (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      await searchLocations();
+    }
+  });
+
+  document.getElementById("scenario-query").addEventListener("input", () => {
+    clearSearchState("Search for a location, then choose the exact match to load.");
+  });
 
   document.querySelectorAll(".preset-button").forEach((button) => {
     button.addEventListener("click", () => {
       document.getElementById("scenario-query").value = button.dataset.query || "";
+      clearSearchState("Preset selected. Find matches, then load the exact location.");
     });
   });
 }
@@ -470,7 +604,7 @@ async function bootstrapView() {
     updateSimulationButtons(false);
     setMapEmptyState(
       true,
-      'Static preview only. Open "http://127.0.0.1:5000/" through Flask to ingest roads and run the live demo.'
+      'Static preview only. Open "http://127.0.0.1:5000/" through Flask to search, ingest roads, and run the live demo.'
     );
     updateStatus(
       "Static preview only. Open http://127.0.0.1:5000/ through Flask for backend sync.",
