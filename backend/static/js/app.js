@@ -14,13 +14,15 @@ const state = {
     selectedVehicleId: null,
     selectedRoadId: null,
     currentPlace: body.dataset.place || "FlowGuard Demo",
-    pollIntervalMs: Number.parseInt(body.dataset.pollIntervalMs || "1000", 10),
+    pollIntervalMs: 500,
     pollHandle: null,
     logs: [],
     vehicleHistory: new Map(),
     riskTimeline: [],
     lastAlertState: new Map(),
     isRefreshing: false,
+    vehicleCount: 50,
+    speedVariation: false,
 }
 
 const dom = {}
@@ -58,6 +60,7 @@ function cacheDom() {
     dom.mapEmpty = $("map-empty-state")
     dom.eventFeed = $("event-feed")
     dom.runtimeSummary = $("runtime-summary")
+    dom.vehicleIntelligence = $("vehicle-intelligence")
     dom.vehicleTable = $("vehicle-table-body")
     dom.vehicleDetail = $("vehicle-detail")
     dom.riskTable = $("risk-table-body")
@@ -68,13 +71,18 @@ function cacheDom() {
     dom.logsList = $("logs-list")
     dom.logSeverity = $("log-severity-filter")
     dom.logVehicle = $("log-vehicle-filter")
+    dom.roadHeatmap = $("road-heatmap")
     dom.searchResults = $("search-results")
     dom.candidateMeta = $("candidate-meta")
     dom.scenarioQuery = $("scenario-query")
     dom.scenarioRadius = $("scenario-radius")
     dom.scenarioPreset = $("scenario-preset")
-    dom.densitySlider = $("traffic-density")
-    dom.densityValue = $("traffic-density-value")
+    dom.locationSelector = $("location-selector")
+    dom.vehicleControlSelect = $("vehicle-control-select")
+    dom.vehicleWrongWayToggle = $("vehicle-wrong-way-toggle")
+    dom.vehicleCount = $("vehicle-count")
+    dom.vehicleCountValue = $("vehicle-count-value")
+    dom.speedVariationToggle = $("speed-variation-toggle")
     dom.responseConsole = $("response-console")
     dom.simulationState = $("simulation-state")
     dom.networkState = $("network-state")
@@ -165,6 +173,16 @@ function mapDangerRadius(vehicle) {
     if (ttc < 2) return 22
     if (ttc < 5) return 14
     return 8
+}
+
+function distanceMeters(a, b) {
+    const toRad = (value) => (Number(value) * Math.PI) / 180
+    const lat1 = toRad(a.lat)
+    const lat2 = toRad(b.lat)
+    const dLat = toRad(b.lat - a.lat)
+    const dLon = toRad(b.lon - a.lon)
+    const x = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2
+    return 2 * 6371000 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x))
 }
 
 function lineWeightForRoad(road) {
@@ -433,14 +451,25 @@ function renderVehicles() {
     state.layers.snapLayer.clearLayers()
 
     const byId = new Map(state.vehicles.map((vehicle) => [vehicle.id, vehicle]))
+    const selected = selectedVehicle()
+    const nearbyIds = new Set()
+    if (selected) {
+        for (const vehicle of state.vehicles) {
+            if (vehicle.id === selected.id) continue
+            if (distanceMeters(selected, vehicle) <= 120) nearbyIds.add(vehicle.id)
+        }
+    }
 
     for (const vehicle of state.vehicles) {
         const selected = vehicle.id === state.selectedVehicleId
+        const isWrongWay = vehicle.semantic_class === "wrong_way" || vehicle.wrong_way_flag || Number(vehicle.wrong_way_probability) >= 0.7
+        const isNearby = nearbyIds.has(vehicle.id)
+        const markerColor = selected ? "#e6e8ec" : isWrongWay ? "#8f4342" : isNearby ? "#727987" : "#4d5666"
         const marker = L.circleMarker([vehicle.lat, vehicle.lon], {
             radius: selected ? 8 : 6,
-            color: alertColor(vehicle.alert),
+            color: selected ? "#ffffff" : markerColor,
             weight: selected ? 2.4 : 1.4,
-            fillColor: alertColor(vehicle.alert),
+            fillColor: markerColor,
             fillOpacity: 0.9,
         })
         marker.bindPopup(buildVehiclePopup(vehicle))
@@ -448,6 +477,7 @@ function renderVehicles() {
             state.selectedVehicleId = vehicle.id
             renderVehicleAnalytics()
             renderVehicles()
+            renderVehicleIntelligencePanel()
         })
         marker.addTo(state.layers.vehicleLayer)
 
@@ -463,10 +493,10 @@ function renderVehicles() {
         }
 
         const futurePositions = vehicle.future_positions || []
-        if (futurePositions.length) {
+        if (futurePositions.length && selected) {
             L.polyline([[vehicle.lat, vehicle.lon], ...futurePositions], {
                 color: "#c9a227",
-                weight: 1.6,
+                weight: 1.2,
                 opacity: 0.8,
                 dashArray: "8 6",
             }).addTo(state.layers.predictionLayer)
@@ -519,16 +549,18 @@ function renderRuntimeSummary() {
         ? `${formatNumber((state.matches.filter((item) => item.matched_edge_id != null).length / state.matches.length) * 100, 0)}%`
         : "--"
 
-    dom.runtimeSummary.innerHTML = `
-        <div class="runtime-row"><span>Network</span><strong>${summary.has_data ? "Loaded" : "Awaiting bootstrap"}</strong></div>
-        <div class="runtime-row"><span>Place</span><strong>${escapeHtml(state.currentPlace)}</strong></div>
-        <div class="runtime-row"><span>Road Segments</span><strong>${formatNumber(summary.roads, 0)}</strong></div>
-        <div class="runtime-row"><span>POIs</span><strong>${formatNumber(summary.pois, 0)}</strong></div>
-        <div class="runtime-row"><span>One-Way Roads</span><strong>${formatNumber(summary.oneway_segments, 0)}</strong></div>
-        <div class="runtime-row"><span>Map Match Rate</span><strong>${matchRate}</strong></div>
-        <div class="runtime-row"><span>Simulation</span><strong>${summary.simulation_running ? "Running" : "Stopped"}</strong></div>
-        <div class="runtime-row"><span>High Risk Vehicles</span><strong>${highRisk}</strong></div>
-    `
+    if (dom.runtimeSummary) {
+        dom.runtimeSummary.innerHTML = `
+            <div class="runtime-row"><span>Network</span><strong>${summary.has_data ? "Loaded" : "Awaiting bootstrap"}</strong></div>
+            <div class="runtime-row"><span>Place</span><strong>${escapeHtml(state.currentPlace)}</strong></div>
+            <div class="runtime-row"><span>Road Segments</span><strong>${formatNumber(summary.roads, 0)}</strong></div>
+            <div class="runtime-row"><span>POIs</span><strong>${formatNumber(summary.pois, 0)}</strong></div>
+            <div class="runtime-row"><span>One-Way Roads</span><strong>${formatNumber(summary.oneway_segments, 0)}</strong></div>
+            <div class="runtime-row"><span>Map Match Rate</span><strong>${matchRate}</strong></div>
+            <div class="runtime-row"><span>Simulation</span><strong>${summary.simulation_running ? "Running" : "Stopped"}</strong></div>
+            <div class="runtime-row"><span>High Risk Vehicles</span><strong>${highRisk}</strong></div>
+        `
+    }
 
     dom.networkState.textContent = summary.has_data ? "Network loaded" : "No network loaded"
     dom.simulationState.textContent = summary.simulation_running ? "Simulation running" : "Simulation stopped"
@@ -546,9 +578,15 @@ function renderMetrics() {
     dom.highRiskCount.textContent = String(highRisk)
     dom.avgTtc.textContent = avgTtcValue == null ? "--" : `${formatNumber(avgTtcValue, 2)} s`
     dom.analyticsCount.textContent = String(state.vehicles.length)
+    if (dom.vehicleControlSelect) {
+        dom.vehicleControlSelect.innerHTML = `<option value="">Select vehicle ID</option>${state.vehicles
+            .map((vehicle) => `<option value="${vehicle.id}" ${vehicle.id === state.selectedVehicleId ? "selected" : ""}>Vehicle ${vehicle.id}</option>`)
+            .join("")}`
+    }
 }
 
 function renderEventFeed() {
+    if (!dom.eventFeed) return
     const items = state.logs.slice(0, 10)
     if (!items.length) {
         dom.eventFeed.innerHTML = '<li class="feed-empty">No events recorded yet.</li>'
@@ -575,6 +613,8 @@ function recordVehicleHistory() {
             ts: Date.now(),
             value: Number(vehicle.wrong_way_probability || 0),
             risk: Number(vehicle.risk_score || 0),
+            directionScore: Number(vehicle.direction_score || 0),
+            ttc: Number.isFinite(Number(vehicle.ttc)) ? Number(vehicle.ttc) : null,
         })
         if (history.length > 24) history.shift()
         state.vehicleHistory.set(vehicle.id, history)
@@ -628,6 +668,82 @@ function emitPipelineLogs() {
     }
 }
 
+function renderVehicleIntelligencePanel() {
+    if (!dom.vehicleIntelligence) return
+    const vehicle = selectedVehicle()
+    if (!vehicle) {
+        dom.vehicleIntelligence.innerHTML = '<div class="detail-empty">Select a vehicle from the map to view intelligence context.</div>'
+        return
+    }
+
+    const nearby = state.vehicles
+        .filter((item) => item.id !== vehicle.id && distanceMeters(vehicle, item) <= 120)
+        .sort((a, b) => distanceMeters(vehicle, a) - distanceMeters(vehicle, b))
+    const closestDistance = nearby.length ? distanceMeters(vehicle, nearby[0]) : null
+    const relativeVelocity = nearby.length
+        ? Math.max(...nearby.map((item) => Math.abs(Number(vehicle.speed || 0) - Number(item.speed || 0))))
+        : 0
+    const riskAmp = Number(vehicle.poi_density || 0) > 0.45 ? 0.2 : 0.1
+
+    dom.vehicleIntelligence.innerHTML = `
+        <div class="detail-section">
+            <h4>Vehicle Summary</h4>
+            <div class="detail-grid">
+                <span>Vehicle ID</span><strong>${vehicle.id}</strong>
+                <span>Speed</span><strong>${formatNumber(vehicle.speed, 1)} m/s</strong>
+                <span>State</span><strong>${escapeHtml(vehicle.temporal_state || "NORMAL")}</strong>
+            </div>
+        </div>
+        <div class="detail-section">
+            <h4>Direction Intelligence</h4>
+            <div class="detail-grid">
+                <span>Direction Score</span><strong>${formatNumber(vehicle.direction_score, 2)}</strong>
+                <span>WWP</span><strong>${formatNumber(vehicle.wrong_way_probability, 2)} (${Number(vehicle.wrong_way_probability) >= 0.8 ? "High Confidence" : "Monitoring"})</strong>
+            </div>
+        </div>
+        <div class="detail-section">
+            <h4>Temporal Analysis</h4>
+            <div class="detail-grid">
+                <span>State</span><strong>${escapeHtml(vehicle.temporal_state || "NORMAL")}</strong>
+                <span>Violation Duration</span><strong>${formatNumber(vehicle.sustained_duration_s, 1)} s</strong>
+                <span>Stability</span><strong>${vehicle.is_stable ? "High" : "Dynamic"}</strong>
+            </div>
+        </div>
+        <div class="detail-section">
+            <h4>Risk Metrics</h4>
+            <div class="detail-grid">
+                <span>TTC</span><strong>${vehicle.ttc == null ? "--" : `${formatNumber(vehicle.ttc, 2)} s`}</strong>
+                <span>Risk Level</span><strong>${escapeHtml(String(vehicle.risk_level || "low").toUpperCase())}</strong>
+                <span>Maneuverability</span><strong>${formatNumber(vehicle.maneuverability, 2, "--")} ${Number(vehicle.maneuverability) < 0.4 ? "(Low Escape Space)" : ""}</strong>
+            </div>
+        </div>
+        <div class="detail-section">
+            <h4>Spatial Awareness</h4>
+            <div class="detail-grid">
+                <span>Nearby Vehicles</span><strong>${nearby.length}</strong>
+                <span>Closest Distance</span><strong>${closestDistance == null ? "--" : `${formatNumber(closestDistance, 1)} m`}</strong>
+                <span>Relative Velocity</span><strong>${relativeVelocity > 4 ? "High" : relativeVelocity > 2 ? "Medium" : "Low"}</strong>
+            </div>
+        </div>
+        <div class="detail-section">
+            <h4>Semantic Road Intelligence</h4>
+            <div class="detail-grid">
+                <span>Road Type</span><strong>${escapeHtml(vehicle.road_class || "Urban Dense")}</strong>
+                <span>POI Density</span><strong>${Number(vehicle.poi_density || 0) > 0.45 ? "High" : "Moderate"}</strong>
+                <span>Risk Amplifier</span><strong>+${formatNumber(riskAmp, 1)}</strong>
+            </div>
+        </div>
+        <div class="detail-section">
+            <h4>Prediction</h4>
+            ${buildPredictionMiniMap(vehicle)}
+            <div class="detail-grid">
+                <span>Future Steps</span><strong>${formatNumber((vehicle.future_positions || []).length, 0)}</strong>
+                <span>Estimated Collision Point</span><strong>${vehicle.collision_with == null ? "--" : `V${vehicle.collision_with}`}</strong>
+            </div>
+        </div>
+    `
+}
+
 function renderVehicleAnalytics() {
     const vehicles = [...state.vehicles].sort((a, b) => {
         const alertDelta = alertRank(b.alert) - alertRank(a.alert)
@@ -656,6 +772,7 @@ function renderVehicleAnalytics() {
             state.selectedVehicleId = Number(row.dataset.vehicleRow)
             renderVehicleAnalytics()
             renderVehicles()
+            renderVehicleIntelligencePanel()
         })
     })
 
@@ -666,7 +783,8 @@ function renderVehicleAnalytics() {
     }
 
     const series = state.vehicleHistory.get(vehicle.id) || []
-    const wwpSeries = series.map((item) => ({ value: item.value }))
+    const directionSeries = series.map((item) => ({ value: item.directionScore }))
+    const ttcSeries = series.map((item) => ({ value: item.ttc == null ? 0 : item.ttc }))
     const riskSeries = series.map((item) => ({ value: item.risk }))
 
     dom.vehicleDetail.innerHTML = `
@@ -679,14 +797,14 @@ function renderVehicleAnalytics() {
         </div>
 
         <div class="detail-section">
-            <h4>Direction Intelligence</h4>
+            <h4>Direction Score Over Time</h4>
             <div class="detail-grid">
                 <span>Direction Score</span><strong>${formatNumber(vehicle.direction_score, 2)}</strong>
                 <span>Wrong-Way Probability</span><strong>${formatNumber(vehicle.wrong_way_probability, 2)}</strong>
                 <span>Alignment</span><strong>${formatNumber(vehicle.alignment, 2)}</strong>
                 <span>Bearing</span><strong>${formatNumber(vehicle.bearing, 1)} deg</strong>
             </div>
-            ${buildSparkline(wwpSeries, "#c9a227")}
+            ${buildSparkline(directionSeries, "#c9a227")}
         </div>
 
         <div class="detail-section">
@@ -700,21 +818,21 @@ function renderVehicleAnalytics() {
         </div>
 
         <div class="detail-section">
-            <h4>Prediction</h4>
-            ${buildPredictionMiniMap(vehicle)}
+            <h4>TTC Over Time</h4>
+            ${buildSparkline(ttcSeries, "#8aa4ff")}
             <div class="detail-grid">
+                <span>Current TTC</span><strong>${vehicle.ttc == null ? "--" : `${formatNumber(vehicle.ttc, 2)} s`}</strong>
                 <span>Prediction State</span><strong>${escapeHtml((vehicle.prediction_state || []).join(", ") || "--")}</strong>
-                <span>Future Steps</span><strong>${formatNumber((vehicle.future_positions || []).length, 0)}</strong>
             </div>
         </div>
 
         <div class="detail-section">
-            <h4>Risk Metrics</h4>
+            <h4>Risk Evolution</h4>
             <div class="detail-grid">
-                <span>TTC</span><strong>${vehicle.ttc == null ? "--" : `${formatNumber(vehicle.ttc, 2)} s`}</strong>
                 <span>Spatial Risk</span><strong>${escapeHtml(vehicle.risk || "safe")}</strong>
                 <span>Memory Score</span><strong>${formatNumber(vehicle.risk_score, 2)}</strong>
                 <span>Final Risk</span><strong>${escapeHtml(vehicle.risk_level || "low")}</strong>
+                <span>Future Steps</span><strong>${formatNumber((vehicle.future_positions || []).length, 0)}</strong>
             </div>
             ${buildSparkline(riskSeries, "#b94a48")}
         </div>
@@ -736,11 +854,10 @@ function renderRiskMonitoring() {
                 <td>${vehicle.id}</td>
                 <td>${vehicle.ttc == null ? "--" : `${formatNumber(vehicle.ttc, 2)} s`}</td>
                 <td>${formatNumber(vehicle.risk_score, 2)}</td>
-                <td>${vehicle.collision_with ?? "--"}</td>
                 <td><span class="inline-badge" style="--badge-color:${riskColor(vehicle.risk_level)}">${escapeHtml(vehicle.risk_level || "low")}</span></td>
             </tr>
         `).join("")
-        : '<tr><td colspan="5" class="table-empty">No risk telemetry available.</td></tr>'
+        : '<tr><td colspan="4" class="table-empty">No risk telemetry available.</td></tr>'
 
     if (!state.riskTimeline.length) {
         dom.riskTimeline.innerHTML = '<div class="detail-empty">Risk timeline will appear once live data is streaming.</div>'
@@ -786,6 +903,25 @@ function renderRoadIntelligence() {
         .map((road) => ({ ...road, intelligence_score: roadIntelligenceScore(road) }))
         .sort((a, b) => b.intelligence_score - a.intelligence_score)
         .slice(0, 30)
+
+    if (dom.roadHeatmap) {
+        const heatRows = rows.slice(0, 8)
+        dom.roadHeatmap.innerHTML = heatRows.length
+            ? `
+                <h4>Muted Heatmap View</h4>
+                <div class="timeline-list">
+                    ${heatRows.map((road) => `
+                        <div class="timeline-row">
+                            <span>Road ${road.id}</span>
+                            <div class="timeline-bars">
+                                <i style="width:${Math.min(100, road.intelligence_score * 10)}%; background:#556074"></i>
+                            </div>
+                        </div>
+                    `).join("")}
+                </div>
+            `
+            : '<div class="detail-empty">Heatmap becomes available after loading roads.</div>'
+    }
 
     if (!state.selectedRoadId && rows.length) {
         state.selectedRoadId = rows[0].id
@@ -847,6 +983,7 @@ function renderRoadIntelligence() {
 }
 
 function renderLogsPage() {
+    if (!dom.logsList || !dom.logSeverity || !dom.logVehicle) return
     const severityFilter = dom.logSeverity.value || "all"
     const vehicleFilter = dom.logVehicle.value.trim()
 
@@ -1059,6 +1196,7 @@ async function refreshSnapshot() {
         renderRuntimeSummary()
         renderVehicles()
         renderVehicleAnalytics()
+        renderVehicleIntelligencePanel()
         renderRiskMonitoring()
         renderRoadIntelligence()
         renderMapEmptyState()
@@ -1091,19 +1229,59 @@ function bindControls() {
     $("reset-simulation").addEventListener("click", resetSimulation)
     $("run-wrong-way").addEventListener("click", triggerWrongWayScenario)
 
-    dom.logSeverity.addEventListener("change", renderLogsPage)
-    dom.logVehicle.addEventListener("input", renderLogsPage)
+    if (dom.logSeverity && dom.logVehicle) {
+        dom.logSeverity.addEventListener("change", renderLogsPage)
+        dom.logVehicle.addEventListener("input", renderLogsPage)
+    }
 
     dom.scenarioPreset.addEventListener("change", () => {
-        const preset = resolveScenarioPreset(dom.scenarioPreset.value)
-        dom.scenarioQuery.value = preset.query
-        dom.scenarioRadius.value = preset.radius
-        addLog("info", `Scenario preset switched to ${dom.scenarioPreset.options[dom.scenarioPreset.selectedIndex].text}.`)
+        if (dom.scenarioPreset.value === "wrong-way-event") {
+            dom.vehicleWrongWayToggle.checked = true
+            addLog("warning", "Scenario switched to wrong-way event mode.")
+            return
+        }
+        if (dom.scenarioPreset.value === "collision-scenario") {
+            addLog("warning", "Scenario switched to collision scenario mode.")
+            return
+        }
+        dom.scenarioQuery.value = "Chennai, Tamil Nadu, India"
+        addLog("info", "Scenario mode switched to normal.")
     })
 
-    dom.densitySlider.addEventListener("input", () => {
-        dom.densityValue.textContent = dom.densitySlider.value
-    })
+    if (dom.locationSelector) {
+        dom.locationSelector.addEventListener("change", () => {
+            dom.scenarioQuery.value = dom.locationSelector.value === "chennai"
+                ? "Chennai, Tamil Nadu, India"
+                : "13.0827,80.2707"
+        })
+    }
+    if (dom.vehicleCount && dom.vehicleCountValue) {
+        dom.vehicleCount.addEventListener("input", () => {
+            state.vehicleCount = Number(dom.vehicleCount.value)
+            dom.vehicleCountValue.textContent = dom.vehicleCount.value
+        })
+    }
+    if (dom.speedVariationToggle) {
+        dom.speedVariationToggle.addEventListener("change", () => {
+            state.speedVariation = dom.speedVariationToggle.checked
+        })
+    }
+    if (dom.vehicleWrongWayToggle) {
+        dom.vehicleWrongWayToggle.addEventListener("change", async () => {
+            if (dom.vehicleWrongWayToggle.checked) {
+                await triggerWrongWayScenario()
+            }
+        })
+    }
+    if (dom.vehicleControlSelect) {
+        dom.vehicleControlSelect.addEventListener("change", () => {
+            if (!dom.vehicleControlSelect.value) return
+            state.selectedVehicleId = Number(dom.vehicleControlSelect.value)
+            renderVehicles()
+            renderVehicleAnalytics()
+            renderVehicleIntelligencePanel()
+        })
+    }
 }
 
 async function bootstrapView() {
@@ -1114,7 +1292,9 @@ async function bootstrapView() {
     renderEventFeed()
     renderLogsPage()
     setPage("dashboard")
-    dom.densityValue.textContent = dom.densitySlider.value
+    if (dom.vehicleCountValue && dom.vehicleCount) {
+        dom.vehicleCountValue.textContent = dom.vehicleCount.value
+    }
 
     try {
         state.summary = await requestJSON("/api/summary")

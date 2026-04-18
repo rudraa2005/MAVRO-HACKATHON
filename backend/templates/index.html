@@ -30,7 +30,6 @@
                 <button type="button" class="nav-item" data-page-target="analytics">Vehicle Analytics</button>
                 <button type="button" class="nav-item" data-page-target="risk">Risk Monitoring</button>
                 <button type="button" class="nav-item" data-page-target="roads">Road Intelligence</button>
-                <button type="button" class="nav-item" data-page-target="logs">System Logs</button>
             </nav>
 
             <section class="sidebar-status">
@@ -54,7 +53,7 @@
                 <div>
                     <p class="section-label">Operations</p>
                     <h2 id="page-title">Operational Dashboard</h2>
-                    <p id="page-subtitle" class="header-subtitle">Live vehicle intelligence, alert status, and network activity.</p>
+                    <p id="page-subtitle" class="header-subtitle">Selection-driven traffic command center with map-first intelligence.</p>
                 </div>
                 <div id="system-status" class="status-indicator" data-tone="neutral">Waiting for first sync</div>
             </header>
@@ -83,16 +82,14 @@
                     <div class="panel-header">
                         <div>
                             <h3>Live Map</h3>
-                            <p>Alert colors, predicted paths, TTC influence zones, collision links, and snap diagnostics.</p>
+                            <p>Vehicles, predicted paths, and selected vehicle context.</p>
                         </div>
                         <div class="legend">
                             <span><i class="legend-road"></i>Roads</span>
-                            <span><i class="legend-poi"></i>POIs</span>
-                            <span><i class="legend-alert"></i>Alert State</span>
-                            <span><i class="legend-ttc"></i>TTC Zone</span>
-                            <span><i class="legend-collision"></i>Collision Link</span>
-                            <span><i class="legend-prediction"></i>Prediction</span>
-                            <span><i class="legend-snapped"></i>Snapped</span>
+                            <span><i class="legend-selected"></i>Selected Vehicle</span>
+                            <span><i class="legend-alert"></i>Wrong-Way</span>
+                            <span><i class="legend-nearby"></i>Nearby Context</span>
+                            <span><i class="legend-prediction"></i>Predicted Path</span>
                         </div>
                     </div>
                     <div class="map-wrap">
@@ -108,21 +105,11 @@
                     <article class="panel">
                         <div class="panel-header">
                             <div>
-                                <h3>Runtime Summary</h3>
-                                <p>Current network and pipeline state.</p>
+                                <h3>Vehicle Intelligence Panel</h3>
+                                <p>Complete intelligence for the currently selected vehicle only.</p>
                             </div>
                         </div>
-                        <div id="runtime-summary" class="runtime-summary"></div>
-                    </article>
-
-                    <article class="panel">
-                        <div class="panel-header">
-                            <div>
-                                <h3>Event Feed</h3>
-                                <p>Recent detection and alert transitions.</p>
-                            </div>
-                        </div>
-                        <ul id="event-feed" class="feed-list"></ul>
+                        <div id="vehicle-intelligence"></div>
                     </article>
                 </aside>
             </section>
@@ -150,7 +137,15 @@
 
                             <div class="field-row">
                                 <label class="field">
-                                    <span>Radius</span>
+                                    <span>Location Selector</span>
+                                    <select id="location-selector">
+                                        <option value="chennai" selected>Chennai</option>
+                                        <option value="custom">Custom bounding box</option>
+                                    </select>
+                                </label>
+
+                                <label class="field">
+                                    <span>Search Radius</span>
                                     <select id="scenario-radius">
                                         <option value="400">400 m</option>
                                         <option value="700" selected>700 m</option>
@@ -158,22 +153,47 @@
                                         <option value="1500">1500 m</option>
                                     </select>
                                 </label>
-
-                                <label class="field">
-                                    <span>Scenario</span>
-                                    <select id="scenario-preset">
-                                        <option value="normal-traffic">Normal traffic</option>
-                                        <option value="sparse-highway">Sparse highway</option>
-                                        <option value="dense-urban">Dense urban</option>
-                                    </select>
-                                </label>
                             </div>
 
                             <label class="field">
-                                <span>Traffic Density</span>
-                                <input id="traffic-density" type="range" min="10" max="100" step="10" value="50">
-                                <small>Current density hint: <strong id="traffic-density-value">50</strong></small>
+                                <span>Scenario Mode</span>
+                                <select id="scenario-preset">
+                                    <option value="normal-traffic">Normal</option>
+                                    <option value="wrong-way-event">Wrong-way event</option>
+                                    <option value="collision-scenario">Collision scenario</option>
+                                </select>
                             </label>
+
+                            <div class="field-row">
+                                <label class="field">
+                                    <span>Vehicle Control</span>
+                                    <select id="vehicle-control-select">
+                                        <option value="">Select vehicle ID</option>
+                                    </select>
+                                </label>
+                                <label class="field checkbox-field">
+                                    <span>Wrong-Way Mode</span>
+                                    <div class="checkbox-wrap">
+                                        <input id="vehicle-wrong-way-toggle" type="checkbox">
+                                        <label for="vehicle-wrong-way-toggle">Set selected vehicle as wrong-way</label>
+                                    </div>
+                                </label>
+                            </div>
+
+                            <div class="field-row">
+                                <label class="field">
+                                    <span>Vehicle Count</span>
+                                    <input id="vehicle-count" type="range" min="10" max="120" step="10" value="50">
+                                    <small>Target vehicles: <strong id="vehicle-count-value">50</strong></small>
+                                </label>
+                                <label class="field checkbox-field">
+                                    <span>Speed Variation</span>
+                                    <div class="checkbox-wrap">
+                                        <input id="speed-variation-toggle" type="checkbox">
+                                        <label for="speed-variation-toggle">Enable speed variation mode</label>
+                                    </div>
+                                </label>
+                            </div>
 
                             <p id="candidate-meta" class="muted-copy">Search for a location and choose the exact match before loading.</p>
 
@@ -181,7 +201,7 @@
                                 <button id="search-locations" type="button">Find Matches</button>
                                 <button id="load-street" type="button">Load Selected Area</button>
                                 <button id="start-simulation" type="button" class="button-secondary">Start</button>
-                                <button id="stop-simulation" type="button" class="button-secondary">Stop</button>
+                                <button id="stop-simulation" type="button" class="button-secondary">Pause</button>
                                 <button id="reset-simulation" type="button" class="button-secondary">Reset</button>
                                 <button id="run-wrong-way" type="button" class="button-secondary">Inject Wrong-Way</button>
                             </div>
@@ -229,7 +249,7 @@
                     <div class="panel-header">
                         <div>
                             <h3>Vehicle Detail</h3>
-                            <p>Direction, temporal state, prediction, and risk in one panel.</p>
+                            <p>Direction score, TTC, and risk evolution over time.</p>
                         </div>
                     </div>
                     <div id="vehicle-detail"></div>
@@ -251,7 +271,6 @@
                                     <th>Vehicle</th>
                                     <th>TTC</th>
                                     <th>Risk Score</th>
-                                    <th>Nearby Vehicle</th>
                                     <th>Alert Level</th>
                                 </tr>
                             </thead>
@@ -291,6 +310,7 @@
                             <p>Semantic weighting derived from POI density, length, and directionality.</p>
                         </div>
                     </div>
+                    <div id="road-heatmap" class="subpanel"></div>
                     <div class="table-wrap">
                         <table class="data-table">
                             <thead>
@@ -314,33 +334,6 @@
                         </div>
                     </div>
                     <div id="road-explanation"></div>
-                </article>
-            </section>
-
-            <section class="page-grid single-column" data-page="logs" hidden>
-                <article class="panel">
-                    <div class="panel-header">
-                        <div>
-                            <h3>System Logs</h3>
-                            <p>Detection logs, prediction logs, and alert state transitions.</p>
-                        </div>
-                    </div>
-                    <div class="filter-row">
-                        <label class="field small-field">
-                            <span>Severity</span>
-                            <select id="log-severity-filter">
-                                <option value="all">All</option>
-                                <option value="info">Info</option>
-                                <option value="warning">Warning</option>
-                                <option value="critical">Critical</option>
-                            </select>
-                        </label>
-                        <label class="field small-field">
-                            <span>Vehicle</span>
-                            <input id="log-vehicle-filter" type="text" placeholder="e.g. 12">
-                        </label>
-                    </div>
-                    <ul id="logs-list" class="log-list"></ul>
                 </article>
             </section>
         </main>

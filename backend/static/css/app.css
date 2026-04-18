@@ -9,7 +9,7 @@
     --medium-risk: #c9a227;
     --safe: #3a7d44;
     --accent: #5c6472;
-    --shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+    --shadow: none;
     --radius: 6px;
 }
 
@@ -306,6 +306,8 @@ textarea {
 .legend-road { background: #4d5666; }
 .legend-poi { background: #9aa3b2; }
 .legend-alert { background: var(--high-risk); }
+.legend-selected { background: #e6e8ec; }
+.legend-nearby { background: #727987; }
 .legend-ttc { background: rgba(185, 74, 72, 0.45); }
 .legend-collision { background: #8d5656; }
 .legend-prediction { background: var(--medium-risk); }
@@ -402,6 +404,21 @@ textarea {
     padding: 10px 12px;
     color: var(--text);
     background: #12151b;
+}
+
+.checkbox-field .checkbox-wrap {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: #12151b;
+    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--text-secondary);
+}
+
+.checkbox-field .checkbox-wrap input {
+    width: auto;
 }
 
 .field input:focus,
