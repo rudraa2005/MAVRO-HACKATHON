@@ -5,6 +5,7 @@ from flask import Blueprint, current_app, jsonify, request
 from backend.models import POI, RoadSegment, Vehicle, VehicleHistory
 from backend.services.bootstrap import bootstrap_input_layer
 from backend.services.input_layer import FlowGuardInputLayer
+from backend.services.ml_layer import live_traffic_intelligence
 from backend.services.osm_ingestion import IngestionError
 from backend.simulation.engine import simulation_engine
 
@@ -54,6 +55,13 @@ def vehicle_history():
 
     rows = query.limit(min(limit, 1000)).all()
     return jsonify([row.to_dict() for row in reversed(rows)])
+
+
+@api_bp.get("/live-analysis")
+def live_analysis():
+    selected_vehicle_id = request.args.get("vehicle_id", type=int)
+    simulation_engine.refresh_network(current_app._get_current_object())
+    return jsonify(live_traffic_intelligence.build_snapshot(selected_vehicle_id))
 
 
 @api_bp.get("/pois")

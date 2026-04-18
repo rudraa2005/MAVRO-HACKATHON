@@ -92,6 +92,9 @@
                         <span><i class="legend-road"></i> Roads</span>
                         <span><i class="legend-poi"></i> POIs</span>
                         <span><i class="legend-vehicle"></i> Vehicles</span>
+                        <span><i class="legend-human"></i> Humans</span>
+                        <span><i class="legend-heat"></i> Heat</span>
+                        <span><i class="legend-trajectory"></i> Prediction</span>
                         <span><i class="legend-wrong"></i> Wrong-Way</span>
                     </div>
                 </div>
@@ -139,6 +142,56 @@
                 <article class="panel">
                     <div class="panel-heading">
                         <div>
+                            <p class="panel-title">Selected Vehicle Intelligence</p>
+                            <p class="panel-subtitle">Trajectory, heat, timing, and behavior</p>
+                        </div>
+                    </div>
+                    <p id="selected-vehicle-summary" class="insight-summary">
+                        Select a vehicle on the map to inspect live predictions.
+                    </p>
+                    <div class="insight-grid">
+                        <div>
+                            <p class="mini-title">Temporal Analysis</p>
+                            <ul id="temporal-analysis" class="event-list compact">
+                                <li>No vehicle selected.</li>
+                            </ul>
+                        </div>
+                        <div>
+                            <p class="mini-title">Behavioral Awareness</p>
+                            <ul id="behavior-awareness" class="event-list compact">
+                                <li>No behavioral profile yet.</li>
+                            </ul>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="panel">
+                    <div class="panel-heading">
+                        <div>
+                            <p class="panel-title">Collision Predictions</p>
+                            <p class="panel-subtitle">Time-to-conflict inside the live horizon</p>
+                        </div>
+                    </div>
+                    <ul id="collision-list" class="event-list compact">
+                        <li>No collision predictions yet.</li>
+                    </ul>
+                </article>
+
+                <article class="panel">
+                    <div class="panel-heading">
+                        <div>
+                            <p class="panel-title">Route Heatmap Overlap</p>
+                            <p class="panel-subtitle">Risk zones on the predicted path</p>
+                        </div>
+                    </div>
+                    <ul id="route-risk-list" class="event-list compact">
+                        <li>No heatmap route overlap yet.</li>
+                    </ul>
+                </article>
+
+                <article class="panel">
+                    <div class="panel-heading">
+                        <div>
                             <p class="panel-title">Wrong-Way Monitor</p>
                             <p class="panel-subtitle">Active suspect vehicles</p>
                         </div>
@@ -159,6 +212,7 @@
                         <li><code>GET /api/roads</code></li>
                         <li><code>GET /api/vehicles</code></li>
                         <li><code>GET /api/vehicles/history</code></li>
+                        <li><code>GET /api/live-analysis</code></li>
                         <li><code>GET /api/pois</code></li>
                         <li><code>GET /api/summary</code></li>
                     </ul>

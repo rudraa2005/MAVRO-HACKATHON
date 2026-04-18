@@ -385,6 +385,37 @@ button:disabled {
     background: var(--danger);
 }
 
+.legend-human {
+    background: #f97316;
+}
+
+.legend-heat {
+    background: #ff9f1c;
+}
+
+.legend-trajectory {
+    background: #8dffd8;
+}
+
+.insight-summary {
+    margin: 0 0 14px;
+    color: var(--muted);
+    line-height: 1.5;
+}
+
+.insight-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 14px;
+}
+
+.mini-title {
+    margin: 0 0 8px;
+    color: var(--text);
+    font-weight: 700;
+    font-size: 0.92rem;
+}
+
 .leaflet-container {
     background: #0d1727;
     font-family: "Space Grotesk", sans-serif;

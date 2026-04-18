@@ -4,8 +4,15 @@ const state = {
   poisLayer: null,
   vehicleLayer: null,
   scenarioLayer: null,
+  humanLayer: null,
+  heatmapLayer: null,
+  predictionLayer: null,
+  collisionLayer: null,
   vehicleMarkers: new Map(),
   roadsById: new Map(),
+  selectedVehicleId: null,
+  latestVehicles: [],
+  latestAnalysis: null,
   hasSuccessfulSync: false,
   syncFailures: 0,
   pollHandle: null,
@@ -44,7 +51,11 @@ function initMap() {
 
   state.roadsLayer = L.layerGroup().addTo(state.map);
   state.poisLayer = L.layerGroup().addTo(state.map);
+  state.heatmapLayer = L.layerGroup().addTo(state.map);
   state.vehicleLayer = L.layerGroup().addTo(state.map);
+  state.humanLayer = L.layerGroup().addTo(state.map);
+  state.predictionLayer = L.layerGroup().addTo(state.map);
+  state.collisionLayer = L.layerGroup().addTo(state.map);
   state.scenarioLayer = L.layerGroup().addTo(state.map);
 }
 
@@ -94,6 +105,17 @@ function updateCounts(summary) {
   updateSimulationButtons(Boolean(summary.simulation_running));
 }
 
+function formatRisk(score) {
+  return `${Math.round(Number(score || 0) * 100)}%`;
+}
+
+function heatColor(score) {
+  if (score >= 0.72) return "#ff3d5a";
+  if (score >= 0.48) return "#ff9f1c";
+  if (score >= 0.25) return "#ffd166";
+  return "#2dd4bf";
+}
+
 function updateWrongWayList(vehicles) {
   const list = document.getElementById("wrong-way-list");
   const wrongWayVehicles = vehicles.filter((vehicle) => vehicle.wrong_way);
@@ -121,6 +143,10 @@ function clearVehicleMarkers() {
 
 function clearScenarioOverlay() {
   state.scenarioLayer.clearLayers();
+  state.humanLayer.clearLayers();
+  state.heatmapLayer.clearLayers();
+  state.predictionLayer.clearLayers();
+  state.collisionLayer.clearLayers();
 }
 
 function clearMapForReload() {
@@ -129,6 +155,8 @@ function clearMapForReload() {
   state.roadsLayer.clearLayers();
   state.poisLayer.clearLayers();
   state.roadsById = new Map();
+  state.selectedVehicleId = null;
+  state.latestAnalysis = null;
 }
 
 function renderRoads(roads) {
@@ -199,21 +227,31 @@ function renderPois(pois) {
 }
 
 function renderVehicles(vehicles) {
+  state.latestVehicles = vehicles.filter((vehicle) => vehicle.lat !== undefined);
   const seen = new Set();
   vehicles.forEach((vehicle) => {
+    if (vehicle.lat === undefined || vehicle.lon === undefined) {
+      return;
+    }
     seen.add(vehicle.id);
     const latLng = [vehicle.lat, vehicle.lon];
-    const color = vehicle.wrong_way ? "#ff5d73" : "#60a5fa";
+    const isSelected = Number(state.selectedVehicleId) === Number(vehicle.id);
+    const color = vehicle.wrong_way ? "#ff5d73" : isSelected ? "#8dffd8" : "#60a5fa";
     let marker = state.vehicleMarkers.get(vehicle.id);
 
     if (!marker) {
       marker = L.circleMarker(latLng, {
-        radius: vehicle.wrong_way ? 6 : 5,
+        radius: vehicle.wrong_way || isSelected ? 7 : 5,
         color,
         fillColor: color,
         fillOpacity: 0.95,
         weight: 2,
       }).addTo(state.vehicleLayer);
+      marker.on("click", async () => {
+        state.selectedVehicleId = vehicle.id;
+        renderVehicles(state.latestVehicles);
+        await refreshAnalysis();
+      });
       state.vehicleMarkers.set(vehicle.id, marker);
     }
 
@@ -221,14 +259,17 @@ function renderVehicles(vehicles) {
     marker.setStyle({
       color,
       fillColor: color,
-      radius: vehicle.wrong_way ? 6 : 5,
+      radius: vehicle.wrong_way || isSelected ? 7 : 5,
+      weight: isSelected ? 4 : 2,
     });
     marker.bindPopup(
       `<strong>Vehicle #${vehicle.id}</strong><br>Speed: ${Number(
         vehicle.speed || 0
       ).toFixed(1)} m/s<br>Bearing: ${Number(vehicle.bearing || 0).toFixed(
         1
-      )}°<br>Segment: ${vehicle.road_segment_id}<br>Wrong-way: ${
+      )} deg<br>Segment: ${vehicle.road_segment_id}<br>Behavior: ${
+        vehicle.behavior || "normal"
+      }<br>Wrong-way: ${
         vehicle.wrong_way ? "yes" : "no"
       }`
     );
@@ -243,6 +284,176 @@ function renderVehicles(vehicles) {
   });
 
   updateWrongWayList(vehicles);
+}
+
+function renderHumans(humans) {
+  state.humanLayer.clearLayers();
+  humans.forEach((human) => {
+    L.circleMarker([human.lat, human.lon], {
+      radius: 4,
+      color: "#fef3c7",
+      fillColor: "#f97316",
+      fillOpacity: 0.9,
+      weight: 1.5,
+    })
+      .bindPopup(
+        `<strong>Human ${human.id}</strong><br>${human.intent}<br>Speed: ${Number(
+          human.speed || 0
+        ).toFixed(1)} m/s<br>Risk zone: ${Number(human.risk_zone_m || 0).toFixed(
+          0
+        )} m`
+      )
+      .addTo(state.humanLayer);
+  });
+}
+
+function renderHeatmap(cells) {
+  state.heatmapLayer.clearLayers();
+  cells.forEach((cell) => {
+    const color = heatColor(Number(cell.risk_score || 0));
+    L.circle([cell.lat, cell.lon], {
+      radius: Number(cell.radius_m || 40),
+      color,
+      fillColor: color,
+      fillOpacity: 0.2,
+      opacity: 0.48,
+      weight: 1,
+    })
+      .bindPopup(
+        `<strong>${cell.risk_level}</strong><br>${cell.scenario}<br>Risk: ${formatRisk(
+          cell.risk_score
+        )}<br>Vehicles: ${cell.vehicle_count}<br>Humans: ${cell.human_count}`
+      )
+      .addTo(state.heatmapLayer);
+  });
+}
+
+function renderTrajectory(selectedVehicle) {
+  state.predictionLayer.clearLayers();
+  const trajectory = selectedVehicle?.trajectory || [];
+  if (!trajectory.length) {
+    return;
+  }
+
+  const latLngs = trajectory.map((point) => [point.lat, point.lon]);
+  L.polyline(latLngs, {
+    color: "#8dffd8",
+    weight: 5,
+    opacity: 0.95,
+    dashArray: "8 8",
+  })
+    .bindPopup(`<strong>Predicted trajectory</strong><br>Vehicle #${selectedVehicle.id}`)
+    .addTo(state.predictionLayer);
+
+  trajectory.slice(1, 7).forEach((point) => {
+    L.circleMarker([point.lat, point.lon], {
+      radius: 3,
+      color: "#8dffd8",
+      fillColor: "#8dffd8",
+      fillOpacity: 0.9,
+      weight: 1,
+    })
+      .bindTooltip(`+${Number(point.t || 0).toFixed(0)}s`)
+      .addTo(state.predictionLayer);
+  });
+}
+
+function renderCollisions(collisions) {
+  state.collisionLayer.clearLayers();
+  collisions.forEach((collision) => {
+    const color = heatColor(Number(collision.risk_score || 0));
+    L.circleMarker([collision.lat, collision.lon], {
+      radius: collision.involves_selected ? 8 : 6,
+      color,
+      fillColor: color,
+      fillOpacity: 0.8,
+      weight: collision.involves_selected ? 3 : 2,
+    })
+      .bindPopup(
+        `<strong>${collision.risk_level} conflict</strong><br>${collision.scenario}<br>Vehicle #${collision.primary_id} vs ${collision.target_type} ${collision.target_id}<br>TTC: ${collision.seconds_to_conflict}s<br>Closest gap: ${collision.distance_m} m`
+      )
+      .addTo(state.collisionLayer);
+  });
+}
+
+function updateInsightPanel(analysis) {
+  const selected = analysis?.selected_vehicle;
+  const summary = document.getElementById("selected-vehicle-summary");
+  const temporal = document.getElementById("temporal-analysis");
+  const behavior = document.getElementById("behavior-awareness");
+  const collisions = document.getElementById("collision-list");
+  const routeRisk = document.getElementById("route-risk-list");
+
+  if (!selected) {
+    summary.textContent = "Select a vehicle on the map to inspect live predictions.";
+    temporal.innerHTML = "<li>No vehicle selected.</li>";
+    behavior.innerHTML = "<li>No behavioral profile yet.</li>";
+    collisions.innerHTML = "<li>No collision predictions yet.</li>";
+    routeRisk.innerHTML = "<li>No heatmap route overlap yet.</li>";
+    return;
+  }
+
+  const awareness = selected.behavioral_awareness || {};
+  const time = selected.temporal_analysis || {};
+  summary.textContent = `Vehicle #${selected.id} selected. ${awareness.narrative || ""}`;
+  temporal.innerHTML = [
+    `Trend: ${time.speed_trend || "n/a"}`,
+    `Average speed: ${Number(time.average_speed_mps || 0).toFixed(1)} m/s`,
+    `Acceleration: ${Number(time.acceleration_mps2 || 0).toFixed(2)} m/s2`,
+    `Heading change: ${Number(time.heading_change_deg || 0).toFixed(1)} deg`,
+  ]
+    .map((item) => `<li>${item}</li>`)
+    .join("");
+
+  behavior.innerHTML = [
+    `Profile: ${awareness.profile || "normal"}`,
+    `Recommended gap: ${Number(awareness.recommended_gap_seconds || 0).toFixed(1)}s`,
+    ...(awareness.awareness_flags || []),
+  ]
+    .map((item) => `<li>${item}</li>`)
+    .join("");
+
+  const selectedCollisions = selected.collision_predictions || [];
+  collisions.innerHTML = selectedCollisions.length
+    ? selectedCollisions
+        .map(
+          (item) =>
+            `<li>${item.risk_level}: ${item.scenario}. ${item.seconds_to_conflict}s, ${item.distance_m} m gap.</li>`
+        )
+        .join("")
+    : "<li>No near-term conflicts inside the prediction horizon.</li>";
+
+  const risks = selected.route_risk || [];
+  routeRisk.innerHTML = risks.length
+    ? risks
+        .map(
+          (item) =>
+            `<li>${item.risk_level}: ${item.scenario} on segment ${item.road_segment_id} (${formatRisk(
+              item.risk_score
+            )}).</li>`
+        )
+        .join("")
+    : "<li>Predicted route is outside active heat zones.</li>";
+}
+
+function renderAnalysis(analysis) {
+  state.latestAnalysis = analysis;
+  if (!state.selectedVehicleId && analysis?.selected_vehicle_id) {
+    state.selectedVehicleId = analysis.selected_vehicle_id;
+  }
+  renderHumans(analysis?.humans || []);
+  renderHeatmap(analysis?.heatmap || []);
+  renderTrajectory(analysis?.selected_vehicle);
+  renderCollisions(analysis?.collision_predictions || []);
+  updateInsightPanel(analysis);
+}
+
+async function refreshAnalysis() {
+  const query = state.selectedVehicleId
+    ? `?vehicle_id=${encodeURIComponent(state.selectedVehicleId)}`
+    : "";
+  const analysis = await requestJSON(`/api/live-analysis${query}`);
+  renderAnalysis(analysis);
 }
 
 function highlightScenario(result) {
@@ -273,14 +484,19 @@ async function refreshSnapshot() {
       updateStatus("Syncing backend state...");
     }
 
-    const [summary, vehicles] = await Promise.all([
+    const analysisQuery = state.selectedVehicleId
+      ? `?vehicle_id=${encodeURIComponent(state.selectedVehicleId)}`
+      : "";
+    const [summary, vehicles, analysis] = await Promise.all([
       requestJSON("/api/summary"),
       requestJSON("/api/vehicles"),
+      requestJSON(`/api/live-analysis${analysisQuery}`),
     ]);
 
     state.hasSuccessfulSync = true;
     state.syncFailures = 0;
     updateCounts(summary);
+    renderAnalysis(analysis);
     renderVehicles(vehicles);
     document.getElementById("last-update").textContent =
       new Date().toLocaleTimeString();

@@ -4,6 +4,7 @@ import random
 import threading
 import time
 from dataclasses import dataclass
+from math import fabs
 from typing import NamedTuple
 
 from flask import Flask
@@ -22,6 +23,12 @@ BEHAVIOR_SPEED_FACTORS = {
     "calm": 0.72,
     "normal": 0.88,
     "aggressive": 1.0,
+}
+
+BEHAVIOR_GAP_FACTORS = {
+    "calm": 1.28,
+    "normal": 1.0,
+    "aggressive": 0.72,
 }
 
 
@@ -339,6 +346,59 @@ class VehicleSimulationEngine:
                 "length_m": segment.length_m,
             }
 
+    def predict_vehicle_path(
+        self,
+        vehicle: Vehicle,
+        horizon_seconds: float = 14.0,
+        step_seconds: float = 1.0,
+    ) -> list[dict[str, float | int]]:
+        segment = self._segments.get(vehicle.road_segment_id)
+        if segment is None:
+            return []
+
+        speed_mps = max(float(vehicle.speed_mps or 0.0), 0.1)
+        progress_m = float(vehicle.progress_m or 0.0)
+        direction = 1 if vehicle.direction >= 0 else -1
+        wrong_way = bool(vehicle.wrong_way)
+        elapsed = 0.0
+        points: list[dict[str, float | int]] = []
+
+        while elapsed <= horizon_seconds:
+            current_segment = self._segments.get(segment.id)
+            if current_segment is None:
+                break
+
+            lat, lon, bearing = self._state_from_segment(
+                current_segment,
+                progress_m,
+                direction,
+            )
+            points.append(
+                {
+                    "t": round(elapsed, 2),
+                    "lat": lat,
+                    "lon": lon,
+                    "bearing": round(bearing, 2),
+                    "speed": round(speed_mps, 2),
+                    "road_segment_id": current_segment.id,
+                }
+            )
+
+            elapsed += step_seconds
+            distance_to_walk = speed_mps * step_seconds
+            progress_m, segment, direction, wrong_way = self._project_along_network(
+                current_segment,
+                progress_m,
+                direction,
+                distance_to_walk,
+                wrong_way,
+            )
+
+        return points
+
+    def recommended_gap_seconds(self, behavior: str) -> float:
+        return round(2.2 * BEHAVIOR_GAP_FACTORS.get(behavior, 1.0), 2)
+
     def _advance_vehicle(self, vehicle: Vehicle, now: float) -> None:
         segment = self._segments.get(vehicle.road_segment_id)
         if segment is None:
@@ -436,6 +496,97 @@ class VehicleSimulationEngine:
             if pool:
                 return self._rng.choice(pool)
         return None
+
+    def _project_along_network(
+        self,
+        segment: SegmentRuntime,
+        progress_m: float,
+        direction: int,
+        distance_m: float,
+        wrong_way: bool,
+    ) -> tuple[float, SegmentRuntime, int, bool]:
+        current_segment = segment
+        current_progress = progress_m
+        current_direction = direction
+        current_wrong_way = wrong_way
+        remaining = max(distance_m, 0.0)
+
+        while remaining > 0:
+            if current_direction >= 0:
+                available = current_segment.length_m - current_progress
+                step = min(remaining, available)
+                current_progress += step
+                boundary_node = current_segment.end_node_id
+            else:
+                available = current_progress
+                step = min(remaining, available)
+                current_progress -= step
+                boundary_node = current_segment.start_node_id
+
+            remaining -= step
+            reached_boundary = available <= step + 1e-6
+            if not reached_boundary:
+                break
+
+            next_option = self._choose_projected_next_option(
+                boundary_node,
+                current_segment.id,
+                current_direction,
+                current_wrong_way,
+            )
+            if next_option is None:
+                current_progress = (
+                    current_segment.length_m if current_direction >= 0 else 0.0
+                )
+                break
+
+            current_segment = self._segments[next_option.segment_id]
+            current_direction = next_option.direction
+            current_wrong_way = next_option.wrong_way
+            current_progress = (
+                0.0 if current_direction >= 0 else current_segment.length_m
+            )
+
+        return current_progress, current_segment, current_direction, current_wrong_way
+
+    def _choose_projected_next_option(
+        self,
+        node_id: int,
+        current_segment_id: int,
+        current_direction: int,
+        prefer_wrong_way: bool,
+    ) -> RouteOption | None:
+        candidates: list[RouteOption] = []
+        if prefer_wrong_way:
+            candidates.extend(self._wrong_way_options.get(node_id, []))
+        candidates.extend(self._normal_options.get(node_id, []))
+        candidates = [
+            option for option in candidates if option.segment_id != current_segment_id
+        ]
+        if not candidates:
+            return None
+
+        current_segment = self._segments[current_segment_id]
+        current_bearing = path_bearing_at(
+            current_segment.geometry,
+            current_segment.cumulative_lengths,
+            current_segment.length_m if current_direction >= 0 else 0.0,
+            current_direction,
+        )
+
+        def score(option: RouteOption) -> float:
+            candidate = self._segments[option.segment_id]
+            candidate_bearing = path_bearing_at(
+                candidate.geometry,
+                candidate.cumulative_lengths,
+                0.0 if option.direction >= 0 else candidate.length_m,
+                option.direction,
+            )
+            delta = fabs(((candidate_bearing - current_bearing + 180.0) % 360.0) - 180.0)
+            wrong_way_penalty = 24.0 if option.wrong_way and not prefer_wrong_way else 0.0
+            return delta + wrong_way_penalty
+
+        return min(candidates, key=score)
 
     def _reset_vehicle(self, vehicle: Vehicle, now: float) -> None:
         segment = self._rng.choice(list(self._segments.values()))
