@@ -14,13 +14,19 @@ frontend only needs a single poll endpoint.
 
 from __future__ import annotations
 
+from copy import deepcopy
 import threading
 import time
 from typing import Any
 
 from backend.extensions import db
 from backend.models import RoadSegment, Vehicle, VehicleHistory
+from backend.services.anomaly_memory import reset_vehicle_memory, update_memory
+from backend.services.compute_spatial import compute_spatial
+from backend.services.decision import run_decision
 from backend.services.map_matching import map_matching_service
+from backend.services.prediction import predict_trajectory, reset_prediction_memory
+from backend.services.risk_engine import run_risk_engine
 from direction_intelligence_core import DirectionIntelligenceEngine, DirectionProbe
 
 
@@ -30,6 +36,8 @@ class DirectionIntelligenceService:
         self._lock = threading.Lock()
         self._road_oneway_cache: dict[int, bool] = {}
         self._seeded_vehicles: set[int] = set()
+        self._last_signature: tuple[Any, ...] | None = None
+        self._last_result: dict[str, Any] | None = None
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -46,19 +54,41 @@ class DirectionIntelligenceService:
         (per-vehicle direction results), and ``stats``.
         """
         started = time.perf_counter()
+        query = Vehicle.query.order_by(Vehicle.id)
+        if limit is not None:
+            query = query.limit(max(1, min(limit, 5000)))
+        vehicle_rows = query.all()
+        vehicles = {vehicle.id: vehicle for vehicle in vehicle_rows}
 
-        # Step 1: map-match all vehicles
-        mm_result = map_matching_service.match_live_vehicles(
+        signature = self._snapshot_signature(
+            vehicles=vehicle_rows,
             candidate_limit=candidate_limit,
             distance_threshold_m=distance_threshold_m,
             max_jump_speed_mps=max_jump_speed_mps,
             limit=limit,
         )
-        matches = mm_result["matches"]
-        mm_stats = mm_result["stats"]
+        cached = self._cached_result(signature)
+        if cached is not None:
+            return cached
 
-        # Step 2: load current vehicles
-        vehicles = {v.id: v for v in Vehicle.query.order_by(Vehicle.id).all()}
+        payloads = [vehicle.to_dict() for vehicle in vehicle_rows]
+
+        # Step 1: map-match all vehicles
+        mm_started = time.perf_counter()
+        matches = map_matching_service.match_payloads(
+            payloads=payloads,
+            candidate_limit=candidate_limit,
+            distance_threshold_m=distance_threshold_m,
+            max_jump_speed_mps=max_jump_speed_mps,
+            update_state_cache=True,
+        )
+        mm_elapsed_ms = (time.perf_counter() - mm_started) * 1000.0
+        mm_stats = {
+            "points": len(payloads),
+            "matched": sum(1 for match in matches if match["matched_edge_id"] is not None),
+            "elapsed_ms": round(mm_elapsed_ms, 3),
+            "avg_ms_per_point": round(mm_elapsed_ms / max(len(payloads), 1), 4),
+        }
 
         # Step 3: seed trajectory buffers for new vehicles
         self._seed_new_vehicles(vehicles)
@@ -93,12 +123,39 @@ class DirectionIntelligenceService:
             result = self._engine.process_probe(probe)
             if result.is_violation:
                 violations += 1
-            direction_results.append(result.to_dict())
+            result_dict = result.to_dict()
+            semantic_class = "normal"
+            if result.is_violation:
+                semantic_class = "wrong_way"
+            elif result_dict["temporal_state"] == "SUSPECT":
+                semantic_class = "risky"
+            result_dict.update(
+                {
+                    "id": vehicle.id,
+                    "lat": vehicle.lat,
+                    "lon": vehicle.lon,
+                    "speed": vehicle.speed_mps,
+                    "bearing": vehicle.bearing,
+                    "timestamp": vehicle.timestamp,
+                    "road_segment_id": vehicle.road_segment_id,
+                    "wrong_way": vehicle.wrong_way,
+                    "behavior": vehicle.behavior,
+                    "semantic_class": semantic_class,
+                    "class": semantic_class,
+                }
+            )
+            direction_results.append(result_dict)
+
+        direction_results = update_memory(direction_results)
+        direction_results = compute_spatial(direction_results)
+        direction_results = [predict_trajectory(vehicle) for vehicle in direction_results]
+        direction_results = run_risk_engine(direction_results)
+        direction_results = run_decision(direction_results)
 
         di_elapsed_ms = (time.perf_counter() - di_started) * 1000.0
         total_elapsed_ms = (time.perf_counter() - started) * 1000.0
 
-        return {
+        result = {
             "matches": matches,
             "direction": direction_results,
             "stats": {
@@ -109,12 +166,18 @@ class DirectionIntelligenceService:
                 "match_stats": mm_stats,
             },
         }
+        self._store_cached_result(signature, result)
+        return deepcopy(result)
 
     def invalidate_cache(self) -> None:
         with self._lock:
             self._engine.clear_all()
             self._road_oneway_cache.clear()
             self._seeded_vehicles.clear()
+            self._last_signature = None
+            self._last_result = None
+            reset_vehicle_memory()
+            reset_prediction_memory()
 
     # ── internals ─────────────────────────────────────────────────────────
 
@@ -144,6 +207,49 @@ class DirectionIntelligenceService:
                     (h.lat, h.lon, h.timestamp) for h in reversed(history)
                 ]
                 self._engine.seed_trajectory(vid, points)
+
+    def _snapshot_signature(
+        self,
+        vehicles: list[Vehicle],
+        candidate_limit: int,
+        distance_threshold_m: float,
+        max_jump_speed_mps: float,
+        limit: int | None,
+    ) -> tuple[Any, ...]:
+        vehicle_signature = tuple(
+            (
+                vehicle.id,
+                round(vehicle.timestamp, 6),
+                round(vehicle.lat, 7),
+                round(vehicle.lon, 7),
+                round(vehicle.speed_mps, 4),
+                round(vehicle.bearing, 4),
+                vehicle.road_segment_id,
+            )
+            for vehicle in vehicles
+        )
+        return (
+            candidate_limit,
+            round(distance_threshold_m, 4),
+            round(max_jump_speed_mps, 4),
+            limit,
+            vehicle_signature,
+        )
+
+    def _cached_result(self, signature: tuple[Any, ...]) -> dict[str, Any] | None:
+        with self._lock:
+            if signature != self._last_signature or self._last_result is None:
+                return None
+            return deepcopy(self._last_result)
+
+    def _store_cached_result(
+        self,
+        signature: tuple[Any, ...],
+        result: dict[str, Any],
+    ) -> None:
+        with self._lock:
+            self._last_signature = signature
+            self._last_result = deepcopy(result)
 
 
 direction_intelligence_service = DirectionIntelligenceService()

@@ -1,98 +1,128 @@
+from __future__ import annotations
+
 import math
-from typing import List
+from typing import Any
 
-def escalate_risk(current_risk: str) -> str:
-    """Helper to escalate risk by one level for semantic violations"""
-    if current_risk == "safe":
-        return "risky"
-    elif current_risk == "risky":
+
+EARTH_RADIUS_M = 6_371_000.0
+MAX_INTERACTION_DISTANCE_M = 50.0
+
+
+def _project_local_xy(
+    lat: float,
+    lon: float,
+    ref_lat: float,
+    ref_lon: float,
+) -> tuple[float, float]:
+    x = math.radians(lon - ref_lon) * EARTH_RADIUS_M * math.cos(math.radians(ref_lat))
+    y = math.radians(lat - ref_lat) * EARTH_RADIUS_M
+    return x, y
+
+
+def _velocity_components(speed_mps: float, bearing_deg: float) -> tuple[float, float]:
+    bearing_rad = math.radians(bearing_deg % 360.0)
+    vx = speed_mps * math.sin(bearing_rad)
+    vy = speed_mps * math.cos(bearing_rad)
+    return vx, vy
+
+
+def _risk_from_ttc(ttc: float) -> str:
+    if ttc < 2.0:
         return "danger"
-    return "danger" # maxes out at danger
+    if ttc < 5.0:
+        return "risky"
+    return "safe"
 
-def compute_spatial(vehicles: List[dict]) -> List[dict]:
+
+def _vehicle_id(vehicle: dict[str, Any]) -> int | None:
+    value = vehicle.get("vehicle_id", vehicle.get("id"))
+    return int(value) if value is not None else None
+
+
+def compute_spatial(vehicles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Compute pairwise TTC and collision risk from live positions and velocities.
+
+    Expected per vehicle:
+    - ``lat``, ``lon`` in WGS84
+    - ``speed`` or ``speed_mps`` in metres/second
+    - ``bearing`` in degrees
+    - ``vehicle_id`` or ``id``
     """
-    Computes pairwise TTC between vehicles and determines collision risk.
-    O(N^2) complexity with unique pairs (i, j where j > i).
-    Updates spatial awareness attributes in-place.
-    """
-    # 1. Initialize fields
+    if not vehicles:
+        return vehicles
+
+    ref_lat = sum(float(vehicle.get("lat", 0.0)) for vehicle in vehicles) / len(vehicles)
+    ref_lon = sum(float(vehicle.get("lon", 0.0)) for vehicle in vehicles) / len(vehicles)
+
+    prepared: list[dict[str, Any]] = []
     for vehicle in vehicles:
-        vehicle["ttc"] = float("inf")
+        lat = float(vehicle.get("lat", 0.0))
+        lon = float(vehicle.get("lon", 0.0))
+        speed_mps = float(vehicle.get("speed", vehicle.get("speed_mps", 0.0)) or 0.0)
+        bearing = float(vehicle.get("bearing", 0.0) or 0.0)
+        x, y = _project_local_xy(lat=lat, lon=lon, ref_lat=ref_lat, ref_lon=ref_lon)
+        vx, vy = _velocity_components(speed_mps=speed_mps, bearing_deg=bearing)
+
+        vehicle["ttc"] = None
         vehicle["risk"] = "safe"
         vehicle["collision_with"] = None
+        prepared.append(
+            {
+                "vehicle": vehicle,
+                "id": _vehicle_id(vehicle),
+                "x": x,
+                "y": y,
+                "vx": vx,
+                "vy": vy,
+            }
+        )
 
-    n = len(vehicles)
-    
-    # 2. Pairwise vehicle comparison
-    for i in range(n):
-        A = vehicles[i]
-        
-        for j in range(i + 1, n):
-            B = vehicles[j]
+    count = len(prepared)
+    for i in range(count):
+        vehicle_a = prepared[i]
+        for j in range(i + 1, count):
+            vehicle_b = prepared[j]
 
-            # 3. Relative motion computation
-            dx = B.get("x", 0.0) - A.get("x", 0.0)
-            dy = B.get("y", 0.0) - A.get("y", 0.0)
-
-            # 6. Distance filtering (Run prior to velocity calculation for performance)
-            distance = math.sqrt(dx**2 + dy**2)
-            if distance > 50:
+            dx = vehicle_b["x"] - vehicle_a["x"]
+            dy = vehicle_b["y"] - vehicle_a["y"]
+            distance = math.hypot(dx, dy)
+            if distance > MAX_INTERACTION_DISTANCE_M:
                 continue
 
-            dvx = B.get("vx", 0.0) - A.get("vx", 0.0)
-            dvy = B.get("vy", 0.0) - A.get("vy", 0.0)
-
-            # 4. Check if vehicles are approaching
+            dvx = vehicle_b["vx"] - vehicle_a["vx"]
+            dvy = vehicle_b["vy"] - vehicle_a["vy"]
             dot = dx * dvx + dy * dvy
-            if dot >= 0:
-                continue # moving apart
+            if dot >= 0.0:
+                continue
 
-            # 5. Compute TTC
-            rel_speed_sq = dvx**2 + dvy**2
-            if rel_speed_sq == 0:
+            rel_speed_sq = dvx * dvx + dvy * dvy
+            if rel_speed_sq <= 1e-9:
                 continue
 
             ttc = -dot / rel_speed_sq
+            risk = _risk_from_ttc(ttc)
+            rounded_ttc = round(ttc, 2)
 
-            # 7. Risk classification
-            if ttc < 2:
-                risk = "danger"
-            elif ttc < 5:
-                risk = "risky"
-            else:
-                risk = "safe"
+            a = vehicle_a["vehicle"]
+            b = vehicle_b["vehicle"]
 
-            # 8. Update both vehicles
-            if ttc < A["ttc"]:
-                A["ttc"] = round(ttc, 2)
-                A["risk"] = risk
-                A["collision_with"] = B.get("id")
+            if a["ttc"] is None or ttc < float(a["ttc"]):
+                a["ttc"] = rounded_ttc
+                a["risk"] = risk
+                a["collision_with"] = vehicle_b["id"]
 
-            if ttc < B["ttc"]:
-                B["ttc"] = round(ttc, 2)
-                B["risk"] = risk
-                B["collision_with"] = A.get("id")
-
-    # Step 9 & Bonus applied to each vehicle independently
-    for vehicle in vehicles:
-        # 9. Semantic-aware adjustment
-        if vehicle.get("class") == "wrong_way":
-            vehicle["risk"] = escalate_risk(vehicle["risk"])
-
-        # 🔥 Bonus: Danger Zone Radius
-        current_ttc = vehicle["ttc"]
-        if current_ttc != float('inf'):
-            radius = max(5.0, 20.0 - current_ttc)
-            vehicle["danger_zone_radius"] = round(radius, 1)
-        else:
-            vehicle["danger_zone_radius"] = 5.0 # Base minimum idle radius
+            if b["ttc"] is None or ttc < float(b["ttc"]):
+                b["ttc"] = rounded_ttc
+                b["risk"] = risk
+                b["collision_with"] = vehicle_a["id"]
 
     return vehicles
 
-def run_spatial(vehicles: List[dict]) -> List[dict]:
-    """Safe pipeline wrapper for TTC spatial tracking"""
+
+def run_spatial(vehicles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Safe pipeline wrapper for TTC spatial tracking."""
     try:
         return compute_spatial(vehicles)
-    except Exception as e:
-        print("[Spatial ERROR]", e)
+    except Exception as exc:
+        print("[Spatial ERROR]", exc)
         return vehicles

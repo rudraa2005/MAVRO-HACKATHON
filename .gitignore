@@ -18,3 +18,4 @@ cache/
 
 dist/
 build/
+.err.log

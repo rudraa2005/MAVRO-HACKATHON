@@ -48,6 +48,7 @@ class DirectionResult:
     """Output of the direction analysis for one vehicle."""
 
     vehicle_id: int
+    temporal_state: str
     direction_similarity: float
     wrong_way_probability: float
     is_violation: bool
@@ -56,10 +57,13 @@ class DirectionResult:
     window_size: int
     avg_wwp: float
     variance: float
+    stable: bool
+    sustained_duration_s: float
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "vehicle_id": self.vehicle_id,
+            "temporal_state": self.temporal_state,
             "direction_similarity": self.direction_similarity,
             "wrong_way_probability": self.wrong_way_probability,
             "is_violation": self.is_violation,
@@ -68,6 +72,8 @@ class DirectionResult:
             "window_size": self.window_size,
             "avg_wwp": self.avg_wwp,
             "variance": self.variance,
+            "stable": self.stable,
+            "sustained_duration_s": self.sustained_duration_s,
         }
 
 
@@ -216,22 +222,26 @@ class DirectionIntelligenceEngine:
         trajectory_points: int = 10,
         trajectory_max_age_s: float = 10.0,
         wwp_window_s: float = 5.0,
+        suspect_threshold: float = 0.4,
         violation_threshold: float = 0.65,
         sustained_seconds: float = 2.0,
         min_speed_mps: float = 1.5,
         oneway_alpha: float = 0.75,
         twoway_alpha: float = 0.55,
         temporal_beta: float = 0.25,
+        stable_variance_threshold: float = 0.05,
     ) -> None:
         self.trajectory_points = trajectory_points
         self.trajectory_max_age_s = trajectory_max_age_s
         self.wwp_window_s = wwp_window_s
+        self.suspect_threshold = suspect_threshold
         self.violation_threshold = violation_threshold
         self.sustained_seconds = sustained_seconds
         self.min_speed_mps = min_speed_mps
         self.oneway_alpha = oneway_alpha
         self.twoway_alpha = twoway_alpha
         self.temporal_beta = temporal_beta
+        self.stable_variance_threshold = stable_variance_threshold
 
         self._traj: dict[int, TrajectoryBuffer] = {}
         self._wwp: dict[int, WWPBuffer] = {}
@@ -294,13 +304,19 @@ class DirectionIntelligenceEngine:
 
         # temporal stability ∈ [0, 1] — low variance = high stability
         stability = max(0.0, 1.0 - var * 4.0)
+        stable = var <= self.stable_variance_threshold
 
         # ── Step 6: final probability ─────────────────────────────────────
         final_wwp = alpha * avg + beta * stability * avg
         final_wwp = min(1.0, max(0.0, final_wwp))
 
         # ── sustained check (reject transient spikes) ─────────────────────
-        sustained = self._is_sustained(wwp_buf, probe.timestamp)
+        sustained_duration = self._duration_above_threshold(
+            wwp_buf=wwp_buf,
+            threshold=self.suspect_threshold,
+            now=probe.timestamp,
+        )
+        sustained = sustained_duration >= self.sustained_seconds and stable
 
         # ── confidence ────────────────────────────────────────────────────
         point_f = min(len(points) / 5.0, 1.0)
@@ -316,9 +332,15 @@ class DirectionIntelligenceEngine:
             and sustained
             and conf >= 0.3
         )
+        temporal_state = self._temporal_state(
+            final_wwp=final_wwp,
+            sustained=sustained,
+            is_violation=is_viol,
+        )
 
         return DirectionResult(
             vehicle_id=vid,
+            temporal_state=temporal_state,
             direction_similarity=round(sim, 4),
             wrong_way_probability=round(final_wwp, 4),
             is_violation=is_viol,
@@ -327,6 +349,8 @@ class DirectionIntelligenceEngine:
             window_size=win,
             avg_wwp=round(avg, 4),
             variance=round(var, 6),
+            stable=stable,
+            sustained_duration_s=round(sustained_duration, 3),
         )
 
     def seed_trajectory(
@@ -366,15 +390,43 @@ class DirectionIntelligenceEngine:
             self._wwp[vid] = WWPBuffer(window_seconds=self.wwp_window_s)
         return self._wwp[vid]
 
-    def _is_sustained(self, wwp_buf: WWPBuffer, now: float) -> bool:
+    def _duration_above_threshold(
+        self,
+        wwp_buf: WWPBuffer,
+        threshold: float,
+        now: float,
+    ) -> float:
         if not wwp_buf.scores:
-            return False
-        return (now - wwp_buf.scores[0][1]) >= self.sustained_seconds
+            return 0.0
+
+        candidate_start: float | None = None
+        for score, timestamp in reversed(wwp_buf.scores):
+            if score < threshold:
+                break
+            candidate_start = timestamp
+
+        if candidate_start is None:
+            return 0.0
+
+        return max(0.0, now - candidate_start)
+
+    def _temporal_state(
+        self,
+        final_wwp: float,
+        sustained: bool,
+        is_violation: bool,
+    ) -> str:
+        if is_violation:
+            return "CONFIRMED"
+        if final_wwp >= self.suspect_threshold or sustained:
+            return "SUSPECT"
+        return "NORMAL"
 
     @staticmethod
     def _empty(vid: int) -> DirectionResult:
         return DirectionResult(
             vehicle_id=vid,
+            temporal_state="NORMAL",
             direction_similarity=0.0,
             wrong_way_probability=0.0,
             is_violation=False,
@@ -383,4 +435,6 @@ class DirectionIntelligenceEngine:
             window_size=0,
             avg_wwp=0.0,
             variance=0.0,
+            stable=False,
+            sustained_duration_s=0.0,
         )

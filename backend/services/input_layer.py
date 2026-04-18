@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from backend.models import POI, RoadSegment, Vehicle
+from backend.services.direction_intelligence import direction_intelligence_service
 
 
 class FlowGuardInputLayer:
@@ -11,8 +12,11 @@ class FlowGuardInputLayer:
         return [segment.to_dict() for segment in segments]
 
     def get_vehicle_updates(self) -> Iterator[dict]:
-        for vehicle in Vehicle.query.order_by(Vehicle.id).all():
-            yield vehicle.to_dict()
+        if Vehicle.query.first() is None:
+            return iter(())
+
+        result = direction_intelligence_service.analyze_live_vehicles()
+        return iter(result["direction"])
 
     def get_pois(self) -> list[dict]:
         pois = POI.query.order_by(POI.id).all()

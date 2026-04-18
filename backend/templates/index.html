@@ -3,189 +3,354 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FlowGuard Input Layer</title>
+    <title>FlowGuard Control System</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link
         rel="stylesheet"
         href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
         integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
         crossorigin=""
     >
-    <link rel="stylesheet" href="../static/css/app.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
 </head>
 <body data-place="{{ place_name }}" data-poll-interval-ms="{{ poll_interval_ms }}">
-    <main class="shell">
-        <section class="hero">
-            <div>
-                <p class="eyebrow">FlowGuard / Input Layer</p>
-                <h1>Roads, POIs, and live GPS simulation in one real-time surface.</h1>
-                <p class="subcopy">
-                    The backend ingests OpenStreetMap road data for <strong>{{ place_name }}</strong>,
-                    persists it to PostgreSQL, and drives a live vehicle simulation with wrong-way injection.
-                </p>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="brand-block">
+                <p class="brand-kicker">FlowGuard</p>
+                <h1>Traffic Intelligence</h1>
+                <p>Real-time wrong-way detection and predictive collision awareness.</p>
             </div>
-            <div class="hero-actions">
-                <div class="control-card">
-                    <label class="field">
-                        <span>Street or Area</span>
-                        <input
-                            id="scenario-query"
-                            type="text"
-                            value="{{ place_name }}"
-                            placeholder="Anna Salai, Chennai, Tamil Nadu, India or 13.0827,80.2707"
-                        >
-                    </label>
-                    <label class="field">
-                        <span>Radius</span>
-                        <select id="scenario-radius">
-                            <option value="400">400 m</option>
-                            <option value="700" selected>700 m</option>
-                            <option value="1000">1000 m</option>
-                            <option value="1500">1500 m</option>
-                        </select>
-                    </label>
-                    <p id="candidate-meta" class="candidate-meta">Search for a location, then choose the exact match to load.</p>
-                    <div class="button-row">
-                        <button id="search-locations" type="button">Find Matches</button>
-                        <button id="load-street" type="button">Load Selected</button>
-                        <button id="start-simulation" type="button" class="secondary-button">Start Simulation</button>
-                        <button id="stop-simulation" type="button" class="secondary-button">Stop Simulation</button>
-                        <button id="run-wrong-way" type="button" class="secondary-button">Trigger Wrong-Way</button>
-                    </div>
-                    <div class="preset-row">
-                        <button type="button" class="preset-button" data-query="Anna Salai, Chennai, Tamil Nadu, India">Anna Salai</button>
-                        <button type="button" class="preset-button" data-query="George Town, Chennai, Tamil Nadu, India">Parry's Corner</button>
-                        <button type="button" class="preset-button" data-query="T. Nagar, Chennai, Tamil Nadu, India">T Nagar</button>
-                    </div>
-                    <ul id="search-results" class="search-results"></ul>
-                </div>
-                <p id="status-pill" class="status-pill">Waiting for first sync</p>
-            </div>
-        </section>
 
-        <section class="stats-grid">
-            <article class="stat-card">
-                <span>Road Segments</span>
-                <strong id="roads-count">0</strong>
-            </article>
-            <article class="stat-card">
-                <span>Vehicles</span>
-                <strong id="vehicles-count">0</strong>
-            </article>
-            <article class="stat-card">
-                <span>Wrong-Way</span>
-                <strong id="wrong-way-count">0</strong>
-            </article>
-            <article class="stat-card">
-                <span>POIs</span>
-                <strong id="pois-count">0</strong>
-            </article>
-            <article class="stat-card">
-                <span>Match Rate</span>
-                <strong id="match-rate">—</strong>
-            </article>
-            <article class="stat-card">
-                <span>DI Violations</span>
-                <strong id="di-violations">0</strong>
-            </article>
-        </section>
+            <nav class="sidebar-nav" aria-label="Primary navigation">
+                <button type="button" class="nav-item active" data-page-target="dashboard">Dashboard</button>
+                <button type="button" class="nav-item" data-page-target="simulation">Simulation Control</button>
+                <button type="button" class="nav-item" data-page-target="analytics">Vehicle Analytics</button>
+                <button type="button" class="nav-item" data-page-target="risk">Risk Monitoring</button>
+                <button type="button" class="nav-item" data-page-target="roads">Road Intelligence</button>
+                <button type="button" class="nav-item" data-page-target="logs">System Logs</button>
+            </nav>
 
-        <section class="content-grid">
-            <article class="panel map-panel">
-                <div class="panel-heading">
-                    <div>
-                        <p class="panel-title">Live Network View</p>
-                        <p class="panel-subtitle">Load a street area, then trigger a visible wrong-way vehicle on a one-way road</p>
-                    </div>
-                    <div class="legend">
-                        <span><i class="legend-road"></i> Roads</span>
-                        <span><i class="legend-poi"></i> POIs</span>
-                        <span><i class="legend-vehicle"></i> Vehicles</span>
-                        <span><i class="legend-wrong"></i> Wrong-Way</span>
-                        <span><i class="legend-snapped"></i> Snapped</span>
-                    </div>
+            <section class="sidebar-status">
+                <div class="status-row">
+                    <span>Network</span>
+                    <strong id="network-state">Checking</strong>
                 </div>
-                <div class="map-wrap">
-                    <div id="map-empty-state" class="map-empty-state">
-                        <strong>No road network loaded yet.</strong>
-                        <p>Use "Load Street Area" to ingest a specific part of the city and start the live vehicle simulation.</p>
-                    </div>
-                    <div id="map"></div>
+                <div class="status-row">
+                    <span>Simulation</span>
+                    <strong id="simulation-state">Checking</strong>
                 </div>
-            </article>
+                <div class="status-row">
+                    <span>Last Sync</span>
+                    <strong id="last-sync">Not synced</strong>
+                </div>
+            </section>
+        </aside>
 
-            <aside class="side-stack">
+        <main class="workspace">
+            <header class="workspace-header">
+                <div>
+                    <p class="section-label">Operations</p>
+                    <h2 id="page-title">Operational Dashboard</h2>
+                    <p id="page-subtitle" class="header-subtitle">Live vehicle intelligence, alert status, and network activity.</p>
+                </div>
+                <div id="system-status" class="status-indicator" data-tone="neutral">Waiting for first sync</div>
+            </header>
+
+            <section class="metrics-bar" aria-label="Key system metrics">
+                <article class="metric-card">
+                    <span>Active Vehicles</span>
+                    <strong id="metric-active-vehicles">0</strong>
+                </article>
+                <article class="metric-card">
+                    <span>Wrong-Way Detected</span>
+                    <strong id="metric-wrong-way">0</strong>
+                </article>
+                <article class="metric-card">
+                    <span>High Risk Events</span>
+                    <strong id="metric-high-risk">0</strong>
+                </article>
+                <article class="metric-card">
+                    <span>Average TTC</span>
+                    <strong id="metric-avg-ttc">--</strong>
+                </article>
+            </section>
+
+            <section class="page-grid" data-page="dashboard">
+                <article class="panel map-panel">
+                    <div class="panel-header">
+                        <div>
+                            <h3>Live Map</h3>
+                            <p>Alert colors, predicted paths, TTC influence zones, collision links, and snap diagnostics.</p>
+                        </div>
+                        <div class="legend">
+                            <span><i class="legend-road"></i>Roads</span>
+                            <span><i class="legend-poi"></i>POIs</span>
+                            <span><i class="legend-alert"></i>Alert State</span>
+                            <span><i class="legend-ttc"></i>TTC Zone</span>
+                            <span><i class="legend-collision"></i>Collision Link</span>
+                            <span><i class="legend-prediction"></i>Prediction</span>
+                            <span><i class="legend-snapped"></i>Snapped</span>
+                        </div>
+                    </div>
+                    <div class="map-wrap">
+                        <div id="map-empty-state" class="map-empty-state">
+                            <strong>No road network loaded yet.</strong>
+                            <p>Open Simulation Control and load a street or neighborhood to initialize the live map.</p>
+                        </div>
+                        <div id="map"></div>
+                    </div>
+                </article>
+
+                <aside class="stack">
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <h3>Runtime Summary</h3>
+                                <p>Current network and pipeline state.</p>
+                            </div>
+                        </div>
+                        <div id="runtime-summary" class="runtime-summary"></div>
+                    </article>
+
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <h3>Event Feed</h3>
+                                <p>Recent detection and alert transitions.</p>
+                            </div>
+                        </div>
+                        <ul id="event-feed" class="feed-list"></ul>
+                    </article>
+                </aside>
+            </section>
+
+            <section class="page-grid single-column" data-page="simulation" hidden>
                 <article class="panel">
-                    <div class="panel-heading">
+                    <div class="panel-header">
                         <div>
-                            <p class="panel-title">Runtime Feed</p>
-                            <p class="panel-subtitle">Latest API state</p>
+                            <h3>Simulation Controls</h3>
+                            <p>Use location search, bootstrap, and runtime actions to drive the live demo.</p>
                         </div>
                     </div>
-                    <dl class="meta-list">
-                        <div>
-                            <dt>Place</dt>
-                            <dd id="place-name">{{ place_name }}</dd>
+
+                    <div class="control-grid">
+                        <div class="form-stack">
+                            <label class="field">
+                                <span>Street or Area</span>
+                                <input
+                                    id="scenario-query"
+                                    type="text"
+                                    value="{{ place_name }}"
+                                    placeholder="Anna Salai, Chennai, Tamil Nadu, India or 13.0827,80.2707"
+                                >
+                            </label>
+
+                            <div class="field-row">
+                                <label class="field">
+                                    <span>Radius</span>
+                                    <select id="scenario-radius">
+                                        <option value="400">400 m</option>
+                                        <option value="700" selected>700 m</option>
+                                        <option value="1000">1000 m</option>
+                                        <option value="1500">1500 m</option>
+                                    </select>
+                                </label>
+
+                                <label class="field">
+                                    <span>Scenario</span>
+                                    <select id="scenario-preset">
+                                        <option value="normal-traffic">Normal traffic</option>
+                                        <option value="sparse-highway">Sparse highway</option>
+                                        <option value="dense-urban">Dense urban</option>
+                                    </select>
+                                </label>
+                            </div>
+
+                            <label class="field">
+                                <span>Traffic Density</span>
+                                <input id="traffic-density" type="range" min="10" max="100" step="10" value="50">
+                                <small>Current density hint: <strong id="traffic-density-value">50</strong></small>
+                            </label>
+
+                            <p id="candidate-meta" class="muted-copy">Search for a location and choose the exact match before loading.</p>
+
+                            <div class="button-row">
+                                <button id="search-locations" type="button">Find Matches</button>
+                                <button id="load-street" type="button">Load Selected Area</button>
+                                <button id="start-simulation" type="button" class="button-secondary">Start</button>
+                                <button id="stop-simulation" type="button" class="button-secondary">Stop</button>
+                                <button id="reset-simulation" type="button" class="button-secondary">Reset</button>
+                                <button id="run-wrong-way" type="button" class="button-secondary">Inject Wrong-Way</button>
+                            </div>
                         </div>
-                        <div>
-                            <dt>Poll Interval</dt>
-                            <dd id="poll-interval">{{ poll_interval_ms }} ms</dd>
+
+                        <div class="panel-subgrid">
+                            <div class="subpanel">
+                                <h4>Search Results</h4>
+                                <ul id="search-results" class="feed-list compact-list"></ul>
+                            </div>
+                            <div class="subpanel">
+                                <h4>System Response</h4>
+                                <pre id="response-console" class="console-view">Waiting for operator action.</pre>
+                            </div>
                         </div>
+                    </div>
+                </article>
+            </section>
+
+            <section class="page-grid analytics-grid" data-page="analytics" hidden>
+                <article class="panel">
+                    <div class="panel-header">
                         <div>
-                            <dt>Last Update</dt>
-                            <dd id="last-update">Not synced yet</dd>
+                            <h3>Vehicle Table</h3>
+                            <p><span id="analytics-count">0</span> vehicles in the active stream.</p>
                         </div>
-                        <div>
-                            <dt>One-Way Roads</dt>
-                            <dd id="oneway-count">0</dd>
-                        </div>
-                        <div>
-                            <dt>Simulation</dt>
-                            <dd id="simulation-state">stopped</dd>
-                        </div>
-                    </dl>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Speed</th>
+                                    <th>WWP</th>
+                                    <th>Risk</th>
+                                    <th>State</th>
+                                </tr>
+                            </thead>
+                            <tbody id="vehicle-table-body"></tbody>
+                        </table>
+                    </div>
                 </article>
 
                 <article class="panel">
-                    <div class="panel-heading">
+                    <div class="panel-header">
                         <div>
-                            <p class="panel-title">Wrong-Way Monitor</p>
-                            <p class="panel-subtitle">Active suspect vehicles</p>
+                            <h3>Vehicle Detail</h3>
+                            <p>Direction, temporal state, prediction, and risk in one panel.</p>
                         </div>
                     </div>
-                    <ul id="wrong-way-list" class="event-list">
-                        <li>No active wrong-way vehicles.</li>
-                    </ul>
+                    <div id="vehicle-detail"></div>
+                </article>
+            </section>
+
+            <section class="page-grid analytics-grid" data-page="risk" hidden>
+                <article class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <h3>Risk Table</h3>
+                            <p>Unified view of TTC, memory score, and alert impact.</p>
+                        </div>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Vehicle</th>
+                                    <th>TTC</th>
+                                    <th>Risk Score</th>
+                                    <th>Nearby Vehicle</th>
+                                    <th>Alert Level</th>
+                                </tr>
+                            </thead>
+                            <tbody id="risk-table-body"></tbody>
+                        </table>
+                    </div>
+                </article>
+
+                <div class="stack">
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <h3>Risk Timeline</h3>
+                                <p>Evolution of critical, high, and medium states.</p>
+                            </div>
+                        </div>
+                        <div id="risk-timeline" class="timeline-list"></div>
+                    </article>
+
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <h3>Collision Preview</h3>
+                                <p>Current pairings produced by the spatial layer.</p>
+                            </div>
+                        </div>
+                        <ul id="collision-preview" class="feed-list"></ul>
+                    </article>
+                </div>
+            </section>
+
+            <section class="page-grid analytics-grid" data-page="roads" hidden>
+                <article class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <h3>Road Segment Table</h3>
+                            <p>Semantic weighting derived from POI density, length, and directionality.</p>
+                        </div>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Segment</th>
+                                    <th>POI Density</th>
+                                    <th>Risk Score</th>
+                                    <th>Complexity</th>
+                                </tr>
+                            </thead>
+                            <tbody id="road-table-body"></tbody>
+                        </table>
+                    </div>
                 </article>
 
                 <article class="panel">
-                    <div class="panel-heading">
+                    <div class="panel-header">
                         <div>
-                            <p class="panel-title">Backend Endpoints</p>
-                            <p class="panel-subtitle">Quick integration surface</p>
+                            <h3>Explanation Panel</h3>
+                            <p>Why the selected road is operationally sensitive.</p>
                         </div>
                     </div>
-                    <ul class="event-list compact">
-                        <li><code>GET /api/roads</code></li>
-                        <li><code>GET /api/vehicles</code></li>
-                        <li><code>GET /api/vehicles/history</code></li>
-                        <li><code>GET /api/pois</code></li>
-                        <li><code>GET /api/summary</code></li>
-                        <li><code>GET /api/map-match/live</code></li>
-                        <li><code>GET /api/direction/live</code></li>
-                    </ul>
+                    <div id="road-explanation"></div>
                 </article>
-            </aside>
-        </section>
-    </main>
+            </section>
+
+            <section class="page-grid single-column" data-page="logs" hidden>
+                <article class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <h3>System Logs</h3>
+                            <p>Detection logs, prediction logs, and alert state transitions.</p>
+                        </div>
+                    </div>
+                    <div class="filter-row">
+                        <label class="field small-field">
+                            <span>Severity</span>
+                            <select id="log-severity-filter">
+                                <option value="all">All</option>
+                                <option value="info">Info</option>
+                                <option value="warning">Warning</option>
+                                <option value="critical">Critical</option>
+                            </select>
+                        </label>
+                        <label class="field small-field">
+                            <span>Vehicle</span>
+                            <input id="log-vehicle-filter" type="text" placeholder="e.g. 12">
+                        </label>
+                    </div>
+                    <ul id="logs-list" class="log-list"></ul>
+                </article>
+            </section>
+        </main>
+    </div>
 
     <script
         src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
         crossorigin=""
     ></script>
-    <script src="../static/js/app.js"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

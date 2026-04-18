@@ -2,29 +2,28 @@ from typing import List
 
 def decision_layer(vehicles: List[dict]) -> List[dict]:
     """
-    Final decision layer. Formulates unified alerts based on the
-    synthesized outputs from detection, semantic reasoning, and spatial modules.
+    Final decision layer for alert-ready vehicle objects.
+
+    Inputs:
+    - semantic class (optional metadata passthrough)
+    - risk_level
+    - ttc
+
+    Output:
+    - alert in {"SAFE", "WARNING", "HIGH_ALERT", "COLLISION_ALERT"}
     """
     for v in vehicles:
-        # Default safety state
         v["alert"] = "SAFE"
-        
-        # Pull required logic fields safely with defaults
-        v_class = v.get("class", "normal")
-        v_ttc = v.get("ttc", float("inf"))
-        v_risk = v.get("risk", "safe")
-        
-        # Hierarchical Alert Logic
-        if v_class == "wrong_way" and v_ttc < 3:
+
+        ttc = v.get("ttc")
+        ttc_value = float(ttc) if ttc is not None else None
+        risk_level = str(v.get("risk_level", "low") or "low").lower()
+
+        if ttc_value is not None and ttc_value < 2.0:
             v["alert"] = "COLLISION_ALERT"
-            
-        elif v_class == "wrong_way":
+        elif risk_level == "high":
             v["alert"] = "HIGH_ALERT"
-            
-        elif v_risk == "danger":
-            v["alert"] = "COLLISION_WARNING"
-            
-        elif v_risk == "risky":
+        elif risk_level == "medium":
             v["alert"] = "WARNING"
 
     return vehicles
@@ -44,9 +43,9 @@ def debug_print_pipeline(vehicles: List[dict]):
     for v in vehicles:
         print(
             f"ID:{v.get('id', 'N/A')} | "
-            f"class:{v.get('class', 'missing')} | "
-            f"risk:{v.get('risk', 'missing')} | "
-            f"ttc:{round(v.get('ttc', 999), 2)} | "
+            f"class:{v.get('class', v.get('semantic_class', 'missing'))} | "
+            f"risk_level:{v.get('risk_level', 'missing')} | "
+            f"ttc:{round(v.get('ttc', 999), 2) if v.get('ttc') is not None else 'None'} | "
             f"alert:{v.get('alert', 'missing')}"
         )
     print("="*60)

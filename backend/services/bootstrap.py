@@ -5,6 +5,7 @@ from flask import Flask, current_app
 
 from backend.extensions import db
 from backend.models import RoadSegment
+from backend.services.direction_intelligence import direction_intelligence_service
 from backend.services.map_matching import map_matching_service
 from backend.services.osm_ingestion import osm_ingestion_service
 from backend.simulation.engine import simulation_engine
@@ -93,10 +94,9 @@ def bootstrap_input_layer(
 
     simulation_engine.refresh_network(app)
     map_matching_service.invalidate_cache()
-    if was_running:
-        simulation_engine.start(app, force=True)
-    else:
-        simulation_engine.clear_fleet(app)
+    direction_intelligence_service.invalidate_cache()
+    simulation_engine.clear_fleet(app)
+    simulation_engine.start(app, force=True)
 
     summary["simulation_running"] = simulation_engine.is_running()
     return summary

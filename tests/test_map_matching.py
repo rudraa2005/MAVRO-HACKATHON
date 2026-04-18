@@ -60,7 +60,8 @@ class MapMatchingIndexTests(unittest.TestCase):
         result = index.match_probe(probe, distance_threshold_m=25.0)
 
         self.assertEqual(result.matched_edge_id, 10)
-        self.assertLess(result.heading_diff or 999.0, 15.0)
+        self.assertIsNotNone(result.heading_diff)
+        self.assertLess(float(result.heading_diff), 15.0)
         self.assertIsNotNone(result.road_vector)
         self.assertLess((result.road_vector or [0.0])[0], 0.0)
 

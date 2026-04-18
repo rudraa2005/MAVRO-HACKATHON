@@ -164,6 +164,7 @@ class EngineNormalDrivingTests(unittest.TestCase):
 
         self.assertLess(result.wrong_way_probability, 0.15)
         self.assertFalse(result.is_violation)
+        self.assertEqual(result.temporal_state, "NORMAL")
         self.assertGreater(result.confidence, 0.0)
         self.assertGreater(result.direction_similarity, 0.8)
 
@@ -194,7 +195,53 @@ class EngineWrongWayTests(unittest.TestCase):
 
         self.assertGreater(result.wrong_way_probability, 0.55)
         self.assertTrue(result.is_violation)
+        self.assertEqual(result.temporal_state, "CONFIRMED")
+        self.assertGreaterEqual(result.sustained_duration_s, 1.5)
         self.assertLess(result.direction_similarity, -0.8)
+
+
+@unittest.skipUnless(HAS_NUMPY, "numpy is required for direction intelligence tests")
+class EngineTemporalStateTests(unittest.TestCase):
+    def test_wrong_way_progresses_to_suspect_before_confirmed(self) -> None:
+        engine = DirectionIntelligenceEngine(
+            sustained_seconds=2.0,
+            min_speed_mps=0.5,
+        )
+        road_vec = (1.0, 0.0)
+
+        states: list[str] = []
+        for i in range(6):
+            probe = _probe(
+                vid=12,
+                lat=13.0000,
+                lon=80.0020 - i * 0.0003,
+                ts=float(i * 0.5),
+                speed=10.0,
+                road_vec=road_vec,
+                oneway=True,
+            )
+            result = engine.process_probe(probe)
+            states.append(result.temporal_state)
+
+        self.assertIn("SUSPECT", states)
+        self.assertEqual(states[-1], "CONFIRMED")
+
+    def test_empty_result_defaults_to_normal_state(self) -> None:
+        engine = DirectionIntelligenceEngine(min_speed_mps=1.5)
+        result = engine.process_probe(
+            _probe(
+                vid=13,
+                lat=13.0,
+                lon=80.0,
+                ts=0.0,
+                speed=0.0,
+                road_vec=(1.0, 0.0),
+            )
+        )
+
+        self.assertEqual(result.temporal_state, "NORMAL")
+        self.assertFalse(result.stable)
+        self.assertEqual(result.sustained_duration_s, 0.0)
 
 
 @unittest.skipUnless(HAS_NUMPY, "numpy is required for direction intelligence tests")
