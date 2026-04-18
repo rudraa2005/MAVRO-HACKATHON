@@ -21,6 +21,8 @@ class Vehicle(db.Model):
     wrong_way = db.Column(db.Boolean, nullable=False, default=False)
     wrong_way_until = db.Column(db.Float, nullable=True)
     behavior = db.Column(db.String(32), nullable=False, default="normal")
+    flashing_lights = db.Column(db.Boolean, nullable=False, default=False)
+
 
     # ML metric columns
     state = db.Column(db.String(16), nullable=False, default="normal")
@@ -91,7 +93,9 @@ class Vehicle(db.Model):
                 if self.closest_distance_m is not None
                 else None
             ),
+            "flashing_lights": self.flashing_lights,
         }
+
 
 
 class VehicleHistory(db.Model):

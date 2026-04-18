@@ -23,6 +23,7 @@ from backend.services.geo import (
     path_bearing_at,
 )
 from backend.services.eval_logger import eval_logger
+from backend.eval.dataset_logger import eval_dataset_logger
 from backend.services.semantic_reasoning import sigmoid_confidence
 
 
@@ -503,12 +504,18 @@ class VehicleSimulationEngine:
                 "anomaly": round(v.anomaly_score, 3),
                 "wrong_way": v.wrong_way,
                 "speed": round(v.speed_mps, 2),
+                "bearing": round(v.heading_deg, 1),
+                "angle_diff": round(v.angle_diff_deg, 1),
+                "gps_quality": 1.0 if v.gps_stability == "HIGH" else 0.7 if v.gps_stability == "MEDIUM" else 0.4,
+                "intent": getattr(v, "intent_classification", "UNKNOWN"),
+                "ground_truth_wrong_way": v.wrong_way,
                 "timestamp": now,
             })
         self._analytics.push(TickSnapshot(t=now, vehicles=snap_vehicles))
 
         # Log ground-truth-labeled data for evaluation pipeline
         eval_logger.log_frame(snap_vehicles)
+        eval_dataset_logger.log_frame(snap_vehicles)
 
         # Flush to DB
         self._flush_to_db()
@@ -1148,9 +1155,10 @@ class VehicleSimulationEngine:
         v._heading_window.append(v.heading_deg)
         v.heading_smooth_deg = self._circular_mean_deg(list(v._heading_window)[-3:])
 
-        road_bearing = segment.bearing if v.direction >= 0 else (segment.bearing + 180.0) % 360.0
-        v.road_bearing_deg = road_bearing
-        angle_diff = abs(v.heading_smooth_deg - road_bearing)
+        # ML Feature: angle_diff_deg should be relative to the BASE legal segment bearing
+        # to ensure wrong-way vehicles maintain a distinct ~180 degree deviation signature.
+        v.road_bearing_deg = segment.bearing
+        angle_diff = abs(v.heading_smooth_deg - segment.bearing)
         v.angle_diff_deg = min(angle_diff, 360.0 - angle_diff)
 
         # Edge-case handling

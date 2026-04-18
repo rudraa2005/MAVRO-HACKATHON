@@ -271,6 +271,56 @@
                 </div>
             </div>
 
+            <div class="card" id="intel-panel" style="display: none;">
+                <div class="card-title">Advanced Intelligence</div>
+                <div class="panel-section">
+                    <div class="metric-row">
+                        <span class="label">Intent</span>
+                        <span class="value" id="intel-intent">—</span>
+                    </div>
+                    <div id="intel-badges"></div>
+                </div>
+
+                <div class="panel-section">
+                    <div class="panel-section-title">Behavioral Profile</div>
+                    
+                    <div class="behavior-bar-row">
+                        <div class="behavior-bar-label"><span>Panic</span><span id="label-panic">0%</span></div>
+                        <div class="behavior-bar-track"><div id="bar-panic" class="behavior-bar-fill" style="background:#e53e3e"></div></div>
+                    </div>
+                    
+                    <div class="behavior-bar-row">
+                        <div class="behavior-bar-label"><span>Impaired</span><span id="label-impaired">0%</span></div>
+                        <div class="behavior-bar-track"><div id="bar-impaired" class="behavior-bar-fill" style="background:#ed8936"></div></div>
+                    </div>
+                    
+                    <div class="behavior-bar-row">
+                        <div class="behavior-bar-label"><span>Deliberate</span><span id="label-deliberate">0%</span></div>
+                        <div class="behavior-bar-track"><div id="bar-deliberate" class="behavior-bar-fill" style="background:#48bb78"></div></div>
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <div class="panel-section-title">Signal Quality</div>
+                    <div class="metric-row">
+                        <span class="label">GPS Quality</span>
+                        <span class="value" id="intel-gps-quality">—</span>
+                    </div>
+                    <div class="angle-gauge-wrap">
+                        <div class="angle-gauge-track">
+                            <div class="angle-gauge-fill" id="bar-gps-quality" style="background:#5a9bd5"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <div class="metric-row">
+                        <span class="label">Gaming Risk</span>
+                        <span class="value" id="intel-gaming">—</span>
+                    </div>
+                </div>
+            </div>
+
             <div class="card">
                 <div class="card-title">Collision Predictions</div>
                 <ul id="collision-list" style="list-style:none; font-size:0.82rem; color: var(--muted);">

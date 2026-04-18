@@ -745,3 +745,60 @@ a:hover {
         max-height: 400px;
     }
 }
+
+/* ===================================================================
+   Advanced Behavioral Visualizations
+   =================================================================== */
+
+@keyframes pulse-red {
+    0% { stroke-width: 3; stroke: #e53e3e; }
+    50% { stroke-width: 8; stroke: #ff0000; }
+    100% { stroke-width: 3; stroke: #e53e3e; }
+}
+
+.pulse-red {
+    animation: pulse-red 1s infinite ease-in-out;
+}
+
+.intel-panel {
+    margin-top: 8px;
+}
+
+.behavior-bar-row {
+    margin: 8px 0;
+}
+
+.behavior-bar-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.7rem;
+    color: var(--muted);
+    margin-bottom: 2px;
+}
+
+.behavior-bar-track {
+    height: 4px;
+    background: #222;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.behavior-bar-fill {
+    height: 100%;
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+.badge {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 2px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    margin-top: 4px;
+}
+
+.badge-emergency { background: #e53e3e; color: white; }
+.badge-convoy { background: #5a9bd5; color: white; }
+.badge-gaming { background: #742a2a; color: white; border: 1px solid #e53e3e; }

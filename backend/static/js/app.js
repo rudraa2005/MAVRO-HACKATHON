@@ -13,6 +13,7 @@ const state = {
     collisionLayer: null,
     laneHighlightLayer: null,
     arrowLayer: null,
+    cascadeLayer: null,
     vehicleMarkers: new Map(),
     vehicleArrows: new Map(),
     roadsById: new Map(),
@@ -79,6 +80,7 @@ function initMap() {
     state.collisionLayer = L.layerGroup().addTo(state.map);
     state.laneHighlightLayer = L.layerGroup().addTo(state.map);
     state.arrowLayer = L.layerGroup().addTo(state.map);
+    state.cascadeLayer = L.layerGroup().addTo(state.map);
 }
 
 function showEmptyState(visible) {
@@ -135,7 +137,7 @@ function renderPois(pois) {
 /* Vehicles (smooth movement — setLatLng, never re-render)            */
 /* ------------------------------------------------------------------ */
 
-function renderVehicles(vehicles) {
+function renderVehicles(vehicles, enhancedTelemetry = {}) {
     state.latestVehicles = vehicles;
     const seen = new Set();
 
@@ -143,27 +145,48 @@ function renderVehicles(vehicles) {
         if (v.lat == null || v.lon == null) return;
         seen.add(v.id);
         const pos = [v.lat, v.lon];
+        const enhanced = enhancedTelemetry[v.id] || {};
+        
         const isSelected = state.selectedVehicleId === v.id;
         const suspicious = v.state === "suspicious";
         const isWrongWay = v.wrong_way || v.state === "wrong_way";
         const isReference = Boolean(v.reference);
-        const color = isWrongWay ? "#a01515" : suspicious ? "#d69e2e" : isSelected ? "#38a169" : "#6f86a3";
+        const isEvasive = enhanced.cascade_role === "EVASIVE";
+        
+        // Detailed Color Logic
+        let color = "#6f86a3"; // Normal
+        if (isSelected) color = "#38a169";
+        if (suspicious) color = "#d69e2e";
+        if (isEvasive) color = "#f6e05e"; // Yellow
+        if (isWrongWay) {
+            const intent = enhanced.intent_classification;
+            if (intent === "DELIBERATE") color = "#742a2a"; // Dark red solid
+            else if (intent === "IMPAIRED") color = "#ed8936"; // Orange
+            else color = "#a01515"; // Normal WW Red
+        }
+
         const radius = isWrongWay || isSelected || isReference ? 7 : 5;
         const pulseWeight = isWrongWay ? (2.2 + (Math.sin(Date.now() / 300) + 1) * 0.8) : (isSelected || isReference ? 3 : 1.5);
+        
+        // GPS Degraded Outline
+        const gpsDegraded = enhanced.gps_degraded;
+        const strokeColor = gpsDegraded ? "#4299e1" : color;
+        const strokeWeight = gpsDegraded ? 3 : pulseWeight;
 
         let marker = state.vehicleMarkers.get(v.id);
         if (!marker) {
             marker = L.circleMarker(pos, {
                 radius,
-                color,
+                color: strokeColor,
                 fillColor: color,
                 fillOpacity: 0.9,
-                weight: pulseWeight,
+                weight: strokeWeight,
+                className: enhanced.intent_classification === "PANICKED" ? "pulse-red" : ""
             }).addTo(state.vehicleLayer);
 
             marker.on("click", () => {
                 state.selectedVehicleId = v.id;
-                renderVehicles(state.latestVehicles);
+                renderVehicles(state.latestVehicles, state.latestAnalysis?.enhanced_telemetry);
                 refreshAnalysis();
             });
             state.vehicleMarkers.set(v.id, marker);
@@ -171,13 +194,32 @@ function renderVehicles(vehicles) {
 
         // Smooth move — just update position
         marker.setLatLng(pos);
-        marker.setStyle({ color, fillColor: color, radius, weight: pulseWeight, fillOpacity: isReference ? 1.0 : 0.9 });
+        
+        // Update styling dynamically
+        marker.setStyle({ 
+            color: strokeColor, 
+            fillColor: color, 
+            radius, 
+            weight: strokeWeight, 
+            fillOpacity: isReference ? 1.0 : 0.9 
+        });
+
+        // Handle Pulsing Class
+        const element = marker.getElement();
+        if (element) {
+            if (isWrongWay && enhanced.intent_classification === "PANICKED") {
+                element.classList.add("pulse-red");
+            } else {
+                element.classList.remove("pulse-red");
+            }
+        }
+
         renderVehicleArrow(v, pos, color);
 
         // Tooltip on hover
         marker.unbindTooltip();
         marker.bindTooltip(
-            `#${v.id}${v.reference ? " [REF]" : ""} | ${Number(v.speed || 0).toFixed(1)} m/s | ${v.state || "normal"} | conf ${Math.round((v.confidence || 0) * 100)}%`,
+            `#${v.id}${v.reference ? " [REF]" : ""} | ${Number(v.speed || 0).toFixed(1)} m/s | ${v.state || "normal"} | intent: ${enhanced.intent_classification || "N/A"}`,
             { direction: "top", offset: [0, -8], className: "" }
         );
     });
@@ -196,7 +238,7 @@ function renderVehicles(vehicles) {
         }
     });
 
-    updateWrongWayList(vehicles);
+    updateWrongWayList(vehicles, enhancedTelemetry);
     renderWrongWayLaneHighlights(vehicles);
 }
 
@@ -247,17 +289,37 @@ function renderWrongWayLaneHighlights(vehicles) {
     });
 }
 
-function updateWrongWayList(vehicles) {
+function updateWrongWayList(vehicles, enhancedTelemetry = {}) {
     const el = document.getElementById("wrong-way-list");
     const ww = vehicles.filter((v) => v.wrong_way || v.state === "wrong_way");
     const suspicious = vehicles.filter((v) => v.state === "suspicious");
+    
     if (!ww.length && !suspicious.length) {
         el.innerHTML = "<li>No active wrong-way vehicles.</li>";
         return;
     }
-    const wwItems = ww.map((v) =>
-        `<li style="color:var(--danger)">Vehicle #${v.id}${v.reference ? " [REF]" : ""} — CONFIRMED (${Math.round((v.confidence || 0) * 100)}%)</li>`
-    );
+    
+    const wwItems = ww.map((v) => {
+        const enhanced = enhancedTelemetry[v.id] || {};
+        let alertMsg = "";
+        let badge = "";
+        
+        if (enhanced.intentional_class === "EMERGENCY_VEHICLE") {
+            alertMsg = "🚨 EMERGENCY VEHICLE - CLEARING PATH";
+            badge = `<span class="badge badge-emergency">EMERGENCY</span> `;
+        } else if (enhanced.intentional_class === "CONVOY") {
+            alertMsg = "⚠️ Intentional Group Movement";
+            badge = `<span class="badge badge-convoy">CONVOY</span> `;
+        } else if (enhanced.gaming_score > 0.8) {
+            alertMsg = "🚔 Law Enforcement Notified (Malicious Gaming)";
+            badge = `<span class="badge badge-gaming">GAMING</span> `;
+        } else {
+            alertMsg = `CONFIRMED (${Math.round((v.confidence || 0) * 100)}%)`;
+        }
+
+        return `<li style="color:var(--danger)">${badge}Vehicle #${v.id} — ${alertMsg}</li>`;
+    });
+
     const susItems = suspicious.slice(0, 6).map((v) =>
         `<li style="color:var(--warning)">Vehicle #${v.id} — SUSPICIOUS (${Math.round((v.confidence || 0) * 100)}%)</li>`
     );
@@ -289,6 +351,7 @@ function renderHeatmap(cells) {
                 fillOpacity: 0.15,
                 opacity: 0.35,
                 weight: 1,
+                interactive: false,
             }).addTo(state.heatmapLayer);
             _heatCircles.set(key, circle);
         }
@@ -334,6 +397,7 @@ function renderCollisions(collisions) {
             fillColor: color,
             fillOpacity: 0.7,
             weight: c.involves_selected ? 2 : 1,
+            interactive: false,
         }).addTo(state.collisionLayer);
     });
 }
@@ -447,6 +511,8 @@ function updateVehiclePanel(analysis) {
         ctxEl.innerHTML = contexts.map((c) => `<li>${c.label} — ${c.risk}</li>`).join("");
     }
 
+    updateAdvancedIntelPanel(analysis);
+
     renderSelectedVehicleHeatmap(sv.selected_vehicle_heatmap || []);
 
     // Collision list
@@ -459,6 +525,83 @@ function updateVehiclePanel(analysis) {
             `<li style="color:${riskColor(c.risk_score)}">${c.risk_level}: ${c.scenario} — TTC ${c.seconds_to_conflict}s, gap ${c.distance_m}m</li>`
         ).join("");
     }
+}
+
+function updateAdvancedIntelPanel(analysis) {
+    const sv = analysis?.selected_vehicle;
+    const enhanced = analysis?.enhanced_telemetry?.[sv?.id];
+    const intelPanel = document.getElementById("intel-panel");
+
+    if (!sv || !enhanced) {
+        intelPanel.style.display = "none";
+        return;
+    }
+
+    intelPanel.style.display = "block";
+    document.getElementById("intel-intent").textContent = enhanced.intent_classification || "UNKNOWN";
+    
+    // Behavioral bars
+    const sig = enhanced.behavioral_signature || {panic_score: 0, impaired_score: 0, deliberate_score: 0};
+    const bars = [
+        {id: "panic", score: sig.panic_score},
+        {id: "impaired", score: sig.impaired_score},
+        {id: "deliberate", score: sig.deliberate_score}
+    ];
+
+    bars.forEach(b => {
+        const fill = document.getElementById(`bar-${b.id}`);
+        const label = document.getElementById(`label-${b.id}`);
+        fill.style.width = `${(b.score * 100).toFixed(0)}%`;
+        label.textContent = `${(b.score * 100).toFixed(0)}%`;
+    });
+
+    // GPS Quality
+    const gpsQ = enhanced.gps_quality_score || 0;
+    document.getElementById("intel-gps-quality").textContent = fmtPct(gpsQ);
+    document.getElementById("bar-gps-quality").style.width = `${(gpsQ * 100).toFixed(0)}%`;
+    document.getElementById("bar-gps-quality").style.background = gpsQ < 0.5 ? "var(--danger)" : gpsQ < 0.8 ? "var(--warning)" : "var(--success)";
+
+    // Gaming Risk
+    const gamingScore = enhanced.gaming_score || 0;
+    const gamingEl = document.getElementById("intel-gaming");
+    gamingEl.textContent = gamingScore > 0.7 ? "⚠️ Potential Gaming" : "✓ Normal";
+    gamingEl.className = "value" + (gamingScore > 0.7 ? " danger" : " success");
+
+    // Badges
+    const badgeContainer = document.getElementById("intel-badges");
+    badgeContainer.innerHTML = "";
+    if (enhanced.intentional_class === "EMERGENCY_VEHICLE") {
+        badgeContainer.innerHTML += `<span class="badge badge-emergency">EMERGENCY</span>`;
+    } else if (enhanced.intentional_class === "CONVOY") {
+        badgeContainer.innerHTML += `<span class="badge badge-convoy">CONVOY</span>`;
+    }
+    if (gamingScore > 0.8) {
+        badgeContainer.innerHTML += ` <span class="badge badge-gaming">CIVIL_GAMING_ALERT</span>`;
+    }
+}
+
+function renderCascadeTree(cascadeTree, latestVehicles) {
+    state.cascadeLayer.clearLayers();
+    if (!cascadeTree) return;
+
+    const vehiclesById = new Map(latestVehicles.map(v => [v.id, v]));
+
+    Object.entries(cascadeTree).forEach(([vId, info]) => {
+        if (info.caused_by) {
+            const child = vehiclesById.get(parseInt(vId));
+            const parent = vehiclesById.get(parseInt(info.caused_by));
+
+            if (child && parent) {
+                // Draw arrow from parent to child
+                L.polyline([[parent.lat, parent.lon], [child.lat, child.lon]], {
+                    color: "#f6e05e",
+                    weight: 2,
+                    dashArray: "5, 10",
+                    opacity: 0.8
+                }).addTo(state.cascadeLayer);
+            }
+        }
+    });
 }
 
 function renderSelectedVehicleHeatmap(points) {
@@ -508,6 +651,7 @@ function renderAnalysis(analysis) {
     renderHeatmap(analysis?.heatmap || []);
     renderTrajectory(analysis?.selected_vehicle);
     renderCollisions(analysis?.collision_predictions || []);
+    renderCascadeTree(analysis?.cascade_tree, state.latestVehicles);
     updateVehiclePanel(analysis);
 }
 
@@ -538,7 +682,7 @@ async function refreshSnapshot() {
         simEl.style.color = summary.simulation_running ? "#38a169" : "#e53e3e";
 
         // Render
-        renderVehicles(vehicles);
+        renderVehicles(vehicles, analysis?.enhanced_telemetry);
         renderAnalysis(analysis);
 
         if (!summary.has_data) {

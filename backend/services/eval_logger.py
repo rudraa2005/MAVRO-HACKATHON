@@ -41,7 +41,8 @@ ROC_POINTS: int = 50                 # number of threshold steps for ROC curve
 # Data types
 # ---------------------------------------------------------------------------
 
-@dataclass(slots=True)
+@dataclass
+
 class EvalRecord:
     """One logged observation: one vehicle at one timestamp."""
     timestamp: float

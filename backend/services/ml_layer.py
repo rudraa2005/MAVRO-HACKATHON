@@ -6,6 +6,10 @@ import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime
+import os
+import joblib
+import pandas as pd
 
 from backend.models import POI, RoadSegment, Vehicle, VehicleHistory
 from backend.services.geo import (
@@ -13,6 +17,15 @@ from backend.services.geo import (
     haversine_distance_m,
     interpolate_path_position,
     move_coordinate,
+)
+from backend.services.behavioral_analysis import (
+    BehavioralFingerprint,
+    ContextualAnomalyDetector,
+    MetaConfidenceTracker,
+    GPSCanyonDetector,
+    IntentionalReversalClassifier,
+    AdversarialDetector,
+    CascadeAnalyzer,
 )
 from backend.simulation.engine import simulation_engine
 
@@ -49,8 +62,34 @@ class LiveTrafficIntelligence:
         self._last_eval_payload: dict = {
             "evaluation": {"tp": 0, "fp": 0, "tn": 0, "fn": 0, "precision": 0.0, "recall": 0.0, "fpr": 0.0},
             "roc": [],
-            "confidence_distribution": {"0.0-0.3": 0, "0.3-0.5": 0, "0.5-0.75": 0, "0.75-1.0": 0},
+            "confidence_distribution": [],
         }
+        
+        # New model integration & calibration metrics
+        self._model_path = "backend/models/final_model.pkl"
+        self._model_data = self._load_model()
+        self._violation_starts = {}  # vehicle_id -> timestamp
+        self._detections = {}        # vehicle_id -> timestamp
+        self._latency_history = []   # list of detection delays
+        self._fp_total = 0
+        self._tn_total = 0
+
+        # Behavioral Intelligence Singletons
+        self.fingerprint = BehavioralFingerprint()
+        self.contextual_anomaly = ContextualAnomalyDetector()
+        self.meta_confidence = MetaConfidenceTracker()
+        self.gps_detector = GPSCanyonDetector()
+        self.reversal_classifier = IntentionalReversalClassifier()
+        self.adversarial_detector = AdversarialDetector()
+        self.cascade_analyzer = CascadeAnalyzer()
+
+    def _load_model(self) -> dict | None:
+        if os.path.exists(self._model_path):
+            try:
+                return joblib.load(self._model_path)
+            except Exception as e:
+                print(f"Failed to load calibrated model: {e}")
+        return None
 
     def build_snapshot(self, selected_vehicle_id: int | None = None) -> dict:
         vehicles = Vehicle.query.order_by(Vehicle.id).all()
@@ -75,12 +114,83 @@ class LiveTrafficIntelligence:
         )
         heatmap = self._build_heatmap(roads, vehicles, humans, collisions)
 
+        # Populate history buffers for all active vehicles to enable behavioral profiling
+        # We fetch the last 40 seconds of data for all vehicles in a single batch query
+        window_start = now - 40.0
+        active_ids = [v.id for v in vehicles]
+        all_hist = VehicleHistory.query.filter(
+            VehicleHistory.vehicle_id.in_(active_ids),
+            VehicleHistory.timestamp >= window_start
+        ).order_by(VehicleHistory.vehicle_id, VehicleHistory.timestamp.asc()).all()
+
+        # Group history by vehicle_id
+        hist_map = defaultdict(list)
+        for h in all_hist:
+            hist_map[h.vehicle_id].append(h)
+
+        # Feed the in-memory deques used by the BehavioralFingerprint
+        for v in vehicles:
+            v_hist = hist_map.get(v.id, [])
+            v.speed_history = [h.speed_mps for h in v_hist]
+            v.bearing_history = [h.bearing for h in v_hist]
+            v.history_timestamps = [h.timestamp for h in v_hist]
+            v.position_history = [(h.lat, h.lon) for h in v_hist]
+            
+            # Reconstruct acceleration history for the jerk calculation
+            if len(v.speed_history) > 1:
+                v.acceleration_history = [0.0]
+                for i in range(1, len(v.speed_history)):
+                    dt = v.history_timestamps[i] - v.history_timestamps[i-1]
+                    dv = v.speed_history[i] - v.speed_history[i-1]
+                    v.acceleration_history.append(dv / dt if dt > 0 else 0.0)
+            else:
+                v.acceleration_history = []
+
+        # Behavioral Intelligence Pass
+        all_enhanced_scores = {}
+        for v in vehicles:
+            road = next((r for r in roads if r.id == v.road_segment_id), None)
+            # Find nearby POIs for the contextual detector
+            nearby_pois = [
+                {"type": p.poi_type, "distance": haversine_distance_m(v.lat, v.lon, p.lat, p.lon)}
+                for p in pois
+                if haversine_distance_m(v.lat, v.lon, p.lat, p.lon) < 500.0
+            ]
+            scores = self.compute_scores(v, vehicles, road, nearby_pois, now)
+            all_enhanced_scores[v.id] = scores
+
+        # Cascade Analysis for Multi-Vehicle Wrong-Way Scenarios
+        wrong_way_list = []
+        for v in vehicles:
+            if v.state == "wrong_way" or v.wrong_way:
+                # Mock a dictionary format compatible with CascadeAnalyzer
+                wrong_way_list.append({
+                    "id": v.id,
+                    "lat": v.lat,
+                    "lon": v.lon,
+                    "bearing": v.bearing,
+                    "timestamp_went_wrong_way": getattr(v, "wrong_way_since", v.timestamp - 2.0) # Heuristic for now
+                })
+        
+        cascade_tree = {}
+        if len(wrong_way_list) > 1:
+            cascade_tree = self.cascade_analyzer.build_temporal_graph(wrong_way_list)
+            for v_id, info in cascade_tree.items():
+                if v_id in all_enhanced_scores:
+                    all_enhanced_scores[v_id]["cascade_role"] = info["role"]
+                    # Update model field
+                    for v in vehicles:
+                        if v.id == v_id:
+                            v.cascade_role = info["role"]
+
         return {
             "selected_vehicle_id": selected_vehicle.id if selected_vehicle else None,
             "selection_source": selection_source,
             "humans": [human.to_dict() for human in humans],
             "heatmap": heatmap,
             "collision_predictions": collisions,
+            "enhanced_telemetry": all_enhanced_scores,
+            "cascade_tree": cascade_tree,
             "selected_vehicle": (
                 self._selected_vehicle_insights(
                     selected_vehicle,
@@ -212,6 +322,162 @@ class LiveTrafficIntelligence:
             "total_vehicles": Vehicle.query.count(),
             "wrong_way_count": sum(1 for v in risk_vehicles if v.get("state") == "wrong_way" or v.get("wrong_way")),
             "critical_count": sum(1 for a in active_alerts if a["risk_level"] == "critical"),
+        }
+
+    def compute_scores(self, vehicle, all_vehicles, road, pois, current_time) -> dict:
+        """Centralized scoring pipeline for behavioral intelligence."""
+        # A. Core Behavioral Analysis
+        signature = self.fingerprint.compute_signature(vehicle)
+        intent = self.fingerprint.classify_intent(signature)
+        gps_quality = self.gps_detector.gps_quality_score(vehicle)
+        
+        # B. GPS Canyon & Dead Reckoning
+        gps_degraded = False
+        if self.gps_detector.should_suppress_alert(vehicle, pois):
+            gps_degraded = True
+            lat_fallback, lon_fallback = self.gps_detector.get_fallback_position(vehicle)
+            # We don't modify the vehicle object's core lat/lon here to keep DB integrity,
+            # but we flag it for the telemetry.
+            
+        # C. Contextual Filtering & Meta-Learning
+        ctx_score = self.contextual_anomaly.contextual_score(
+            vehicle, road, pois, datetime.fromtimestamp(current_time)
+        )
+        # Wrap context for MetaConfidenceTracker
+        class ContextWrapper:
+            def __init__(self, t, w):
+                self.time = t
+                self.weather = w
+        context = ContextWrapper(datetime.fromtimestamp(current_time), "clear")
+        
+        confidence = self.meta_confidence.get_confidence(vehicle, road, context)
+        
+        # D. Calibrated Prediction & Thresholding
+        if self._model_data:
+            model = self._model_data["model"]
+            scaler = self._model_data.get("scaler")
+            
+            # Feature calculation: dev_angle is the deviation from road bearing
+            road_bearing = road.bearing if road else 0.0
+            vehicle_bearing = vehicle.bearing
+            angle_diff = abs(((vehicle_bearing - road_bearing + 180.0) % 360.0) - 180.0)
+            
+            # Build feature dataframe [speed, dev_angle, anomaly_score, gps_quality]
+            features_dict = {
+                "speed": vehicle.speed_mps,
+                "dev_angle": angle_diff,
+                "anomaly_score": vehicle.anomaly_score,
+                "gps_quality": gps_quality
+            }
+            features_df = pd.DataFrame([features_dict])
+            
+            try:
+                # Apply scaler transform if available
+                if scaler:
+                    X_scaled = scaler.transform(features_df)
+                else:
+                    X_scaled = features_df # Fallback if scaler missing (unlikely)
+
+                calibrated_prob = model.predict_proba(X_scaled)[0][1]
+                confidence = float(calibrated_prob)
+                
+                # Apply optimized threshold
+                threshold = self._model_data.get("threshold", 0.5)
+                
+                # Update vehicle state with hysteresis for stability
+                if confidence > threshold:
+                    vehicle.state = "wrong_way"
+                elif vehicle.state == "wrong_way" and confidence < (threshold * 0.7):
+                    # Higher hysteresis gap (0.7) for real-world simulation stability
+                    vehicle.state = "normal"
+            except Exception as e:
+                print(f"Prediction failed: {e}")
+
+        # E. Active Feedback Loop (Learning)
+        # Update the meta-confidence tracker based on prediction correctness
+        if self._model_data and hasattr(vehicle, "ground_truth_wrong_way"):
+            actual = vehicle.ground_truth_wrong_way
+            predicted = vehicle.state == "wrong_way"
+            was_correct = (actual == predicted)
+            
+            # Key = road_type_time_weather_gps
+            road_type = getattr(road, "road_class", "primary") or "primary"
+            time_period = self.meta_confidence.get_time_period(datetime.fromtimestamp(current_time))
+            # We'll use a string key directly
+            situation_key = f"{road_type}_{time_period}_clear_medium" 
+            self.meta_confidence.update(situation_key, was_correct)
+
+        # F. Performance Tracking (Temporal & FP)
+        # Ground Truth comparison (assuming simulation_engine.get_vehicle_live)
+        # Here we use vehicle.wrong_way attribute as ground truth (from sim)
+        actual = bool(getattr(vehicle, "wrong_way", False))
+        predicted = (confidence > self._model_data.get("threshold", 0.5)) if self._model_data else (vehicle.state == "wrong_way")
+        
+        if actual:
+            if vehicle.id not in self._violation_starts:
+                self._violation_starts[vehicle.id] = current_time
+            
+            if predicted and vehicle.id not in self._detections:
+                self._detections[vehicle.id] = current_time
+                delay = current_time - self._violation_starts[vehicle.id]
+                self._latency_history.append(delay)
+                print(f"VEHICLE {vehicle.id} DETECTED with delay {delay:.2f}s (Avg: {sum(self._latency_history)/len(self._latency_history):.2f}s)")
+        else:
+            # Not a violation ground truth
+            self._violation_starts.pop(vehicle.id, None)
+            self._detections.pop(vehicle.id, None)
+            
+            if predicted:
+                self._fp_total += 1
+            else:
+                self._tn_total += 1
+            
+            if (self._fp_total + self._tn_total) % 100 == 0:
+                fpr = self._fp_total / max(1, (self._fp_total + self._tn_total))
+                print(f"LIVE FPR: {fpr:.4f}")
+
+        adjusted_anomaly = ctx_score * confidence
+        
+        # F. Wrong-Way Depth Analysis
+        gaming_score = 0.0
+        intentional_class = "UNKNOWN"
+        alert_suppressed = False
+        escalate = False
+        
+        if vehicle.wrong_way or vehicle.state == "wrong_way":
+            if signature:
+                gaming_score = self.adversarial_detector.calculate_gaming_score(vehicle, signature)
+                escalate = self.adversarial_detector.should_escalate(gaming_score)
+                
+            intentional_class = self.reversal_classifier.classify(
+                vehicle, all_vehicles, datetime.fromtimestamp(current_time)
+            )
+            
+            # Policy-based alert suppression
+            if intentional_class in ["EMERGENCY_VEHICLE", "CONVOY"]:
+                alert_suppressed = True
+
+        # E. Update Model Fields
+        vehicle.behavioral_signature = signature
+        vehicle.intent_classification = intent
+        vehicle.confidence_adjustment = float(confidence)
+        vehicle.gps_quality_score = float(gps_quality)
+        # Note: cascade_role is handled in build_snapshot for multi-vehicle context
+        
+        # Prepare output
+        return {
+            "vehicle_id": vehicle.id,
+            "behavioral_signature": signature,
+            "intent_classification": intent,
+            "gps_quality_score": round(gps_quality, 3),
+            "gps_degraded": gps_degraded,
+            "confidence_adjustment": round(confidence, 3),
+            "adjusted_anomaly": round(adjusted_anomaly, 3),
+            "gaming_score": round(gaming_score, 3),
+            "intentional_class": intentional_class,
+            "alert_suppressed": alert_suppressed,
+            "escalate_law_enforcement": escalate,
+            "cascade_role": getattr(vehicle, "cascade_role", "NONE")
         }
 
     # ------------------------------------------------------------------
