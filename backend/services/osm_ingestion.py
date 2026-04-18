@@ -7,6 +7,11 @@ from typing import Any
 from shapely.geometry import LineString, Point
 from shapely.strtree import STRtree
 
+from backend.models.road import _USE_POSTGIS
+
+if _USE_POSTGIS:
+    from geoalchemy2.shape import from_shape
+
 from backend.extensions import db
 from backend.models import POI, RoadSegment, Vehicle, VehicleHistory
 from backend.services.geo import (
@@ -52,12 +57,22 @@ class IngestionError(ValueError):
 
 
 class OSMIngestionService:
+    def search_candidates(
+        self,
+        query: str,
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        import osmnx as ox
+
+        return self._search_candidates(ox, query=query, limit=limit)
+
     def ingest_query(
         self,
         query: str,
         query_type: str = "auto",
         radius_m: int = 700,
         reset: bool = False,
+        selection: dict[str, Any] | None = None,
     ) -> dict[str, int | float | str | bool]:
         import osmnx as ox
 
@@ -67,6 +82,7 @@ class OSMIngestionService:
             query=query,
             query_type=normalized_query_type,
             radius_m=radius_m,
+            selection=selection,
         )
         graph = resolved["graph"]
         features = resolved["features"]
@@ -74,6 +90,7 @@ class OSMIngestionService:
         center_lon = resolved["center_lon"]
         scope = resolved["scope"]
         resolved_query = resolved["resolved_query"]
+        selected_candidate = resolved["selected_candidate"]
 
         node_frame, edge_frame = ox.graph_to_gdfs(graph, nodes=True, edges=True)
         edge_rows = edge_frame.reset_index()
@@ -107,6 +124,7 @@ class OSMIngestionService:
             "resolved_query": resolved_query,
             "scope": scope,
             "radius_m": radius_m,
+            "selected_candidate": selected_candidate,
             "road_segments": len(road_segments),
             "oneway_segments": sum(1 for segment in road_segments if segment.oneway),
             "pois": len(pois),
@@ -143,6 +161,12 @@ class OSMIngestionService:
                 getattr(row, "maxspeed", None),
                 road_class,
             )
+            geom_kwargs = {}
+            if _USE_POSTGIS:
+                geom_kwargs["geom"] = from_shape(
+                    LineString([(p["lon"], p["lat"]) for p in path]),
+                    srid=4326,
+                )
             segments.append(
                 RoadSegment(
                     osm_way_id=self._safe_int(getattr(row, "osmid", None)),
@@ -163,6 +187,7 @@ class OSMIngestionService:
                     geometry=path,
                     road_class=road_class,
                     speed_limit_mps=speed_limit_mps,
+                    **geom_kwargs,
                 )
             )
         return segments
@@ -173,91 +198,112 @@ class OSMIngestionService:
         query: str,
         query_type: str,
         radius_m: int,
+        selection: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if selection is not None:
+            candidate = self._normalize_candidate_selection(selection)
+        else:
+            search_result = self._search_candidates(ox, query=query, limit=5)
+            if not search_result["candidates"]:
+                message = (
+                    f'Could not resolve "{query}" to an OSM location. '
+                    "Try a more specific street or neighborhood."
+                )
+                if search_result["suggestions"]:
+                    message += f" Suggestions: {', '.join(search_result['suggestions'])}."
+                if search_result["attempted"]:
+                    attempted = ", ".join(search_result["attempted"][:6])
+                    message += f" Attempted: {attempted}."
+                if search_result["errors"]:
+                    message += f" Upstream detail: {search_result['errors'][0]}."
+                raise IngestionError(message)
+            candidate = search_result["candidates"][0]
+
+        return self._resolve_candidate_payload(ox, candidate=candidate, radius_m=radius_m)
+
+    def _search_candidates(
+        self,
+        ox,
+        query: str,
+        limit: int,
+    ) -> dict[str, Any]:
+        max_results = max(1, min(limit, 8))
         coordinate = self._parse_coordinate_query(query)
-        if query_type != "place" and coordinate is not None:
-            center_lat, center_lon = coordinate
-            graph = ox.graph_from_point(
-                (center_lat, center_lon),
-                dist=radius_m,
-                network_type="drive",
-                simplify=True,
-            )
-            features = ox.features_from_point(
-                (center_lat, center_lon),
-                self._poi_tags(),
-                dist=radius_m,
-            )
-            node_frame, _ = ox.graph_to_gdfs(graph, nodes=True, edges=False)
-            center_lat, center_lon = self._graph_center(node_frame)
+        if coordinate is not None:
             return {
-                "graph": graph,
-                "features": features,
-                "center_lat": center_lat,
-                "center_lon": center_lon,
-                "scope": "street_area",
-                "resolved_query": query.strip(),
+                "query": query,
+                "candidates": [self._coordinate_candidate(query, coordinate)],
+                "attempted": [f"coordinates:{query.strip()}"],
+                "errors": [],
+                "suggestions": [],
             }
 
-        candidates = self._candidate_queries(query)
+        candidate_queries = self._candidate_queries(query)
         attempted: list[str] = []
-        last_error: Exception | None = None
+        errors: list[str] = []
+        candidates: list[dict[str, Any]] = []
+        seen: set[str] = set()
 
-        if query_type == "place":
-            modes = ("place",)
-        else:
-            modes = ("point", "place")
-
-        for mode in modes:
-            for candidate in candidates:
-                attempted.append(f"{mode}:{candidate}")
+        for candidate_query in candidate_queries:
+            for which_result in range(1, max_results + 1):
+                attempted.append(f"search:{candidate_query}#{which_result}")
                 try:
-                    if mode == "place":
-                        graph = ox.graph_from_place(
-                            candidate,
-                            network_type="drive",
-                            simplify=True,
-                        )
-                        features = ox.features_from_place(candidate, self._poi_tags())
-                    else:
-                        center_lat, center_lon = ox.geocode(candidate)
-                        graph = ox.graph_from_point(
-                            (center_lat, center_lon),
-                            dist=radius_m,
-                            network_type="drive",
-                            simplify=True,
-                        )
-                        features = ox.features_from_point(
-                            (center_lat, center_lon),
-                            self._poi_tags(),
-                            dist=radius_m,
-                        )
-
-                    node_frame, _ = ox.graph_to_gdfs(graph, nodes=True, edges=False)
-                    center_lat, center_lon = self._graph_center(node_frame)
-                    return {
-                        "graph": graph,
-                        "features": features,
-                        "center_lat": center_lat,
-                        "center_lon": center_lon,
-                        "scope": "place" if mode == "place" else "street_area",
-                        "resolved_query": candidate,
-                    }
+                    gdf = ox.geocode_to_gdf(candidate_query, which_result=which_result)
                 except Exception as exc:
-                    last_error = exc
+                    errors.append(f"{candidate_query}#{which_result}: {exc}")
+                    break
 
-        suggestion_list = self._suggestions_for(query)
-        message = (
-            f'Could not resolve "{query}" to an OSM location. '
-            "Try a more specific street or neighborhood."
+                row = gdf.iloc[0]
+                candidate = self._candidate_from_row(candidate_query, which_result, row)
+                candidate_key = self._candidate_key(candidate)
+                if candidate_key in seen:
+                    continue
+
+                seen.add(candidate_key)
+                candidates.append(candidate)
+                if len(candidates) >= max_results:
+                    break
+            if len(candidates) >= max_results:
+                break
+
+        return {
+            "query": query,
+            "candidates": candidates,
+            "attempted": attempted,
+            "errors": errors,
+            "suggestions": self._suggestions_for(query),
+        }
+
+    def _resolve_candidate_payload(
+        self,
+        ox,
+        candidate: dict[str, Any],
+        radius_m: int,
+    ) -> dict[str, Any]:
+        center_lat = float(candidate["lat"])
+        center_lon = float(candidate["lon"])
+        graph = ox.graph_from_point(
+            (center_lat, center_lon),
+            dist=radius_m,
+            network_type="drive",
+            simplify=True,
         )
-        if suggestion_list:
-            message += f" Suggestions: {', '.join(suggestion_list)}."
-        if attempted:
-            message += f" Attempted: {', '.join(attempted[:6])}."
-        if last_error is not None:
-            message += f" Upstream detail: {last_error}."
-        raise IngestionError(message)
+        features = ox.features_from_point(
+            (center_lat, center_lon),
+            self._poi_tags(),
+            dist=radius_m,
+        )
+        node_frame = ox.graph_to_gdfs(graph, nodes=True, edges=False)
+        center_lat, center_lon = self._graph_center(node_frame)
+        return {
+            "graph": graph,
+            "features": features,
+            "center_lat": center_lat,
+            "center_lon": center_lon,
+            "scope": "street_area",
+            "resolved_query": candidate["display_name"],
+            "selected_candidate": candidate,
+        }
 
     def _build_pois(self, features, node_frame, road_segments: list[RoadSegment]) -> list[POI]:
         road_lines = [
@@ -374,6 +420,131 @@ class OSMIngestionService:
         if isinstance(index, tuple):
             return ":".join(str(item) for item in index)
         return str(index)
+
+    def _candidate_from_row(
+        self,
+        candidate_query: str,
+        which_result: int,
+        row,
+    ) -> dict[str, Any]:
+        geometry = row.geometry
+        geometry_type = geometry.geom_type if geometry is not None else "Unknown"
+        osm_type = self._row_text(row, "osm_type")
+        osm_id = self._coerce_optional_int(row.get("osm_id"))
+        candidate = {
+            "id": self._candidate_identifier(candidate_query, which_result, osm_type, osm_id),
+            "candidate_query": candidate_query,
+            "which_result": which_result,
+            "display_name": self._row_text(row, "display_name") or candidate_query,
+            "lat": float(row.get("lat")),
+            "lon": float(row.get("lon")),
+            "geometry_type": geometry_type,
+            "match_mode": "area" if geometry_type in {"Polygon", "MultiPolygon"} else "point",
+            "osm_type": osm_type,
+            "osm_id": osm_id,
+            "importance": float(row.get("importance") or 0.0),
+            "class_name": self._row_text(row, "class"),
+            "type_name": self._row_text(row, "type"),
+            "bbox": {
+                "north": float(row.get("bbox_north")),
+                "south": float(row.get("bbox_south")),
+                "east": float(row.get("bbox_east")),
+                "west": float(row.get("bbox_west")),
+            },
+        }
+        return candidate
+
+    def _coordinate_candidate(
+        self,
+        query: str,
+        coordinate: tuple[float, float],
+    ) -> dict[str, Any]:
+        lat, lon = coordinate
+        return {
+            "id": f"coordinates:{lat:.6f},{lon:.6f}",
+            "candidate_query": query.strip(),
+            "which_result": 1,
+            "display_name": f"Coordinates {lat:.5f}, {lon:.5f}",
+            "lat": lat,
+            "lon": lon,
+            "geometry_type": "Point",
+            "match_mode": "point",
+            "osm_type": None,
+            "osm_id": None,
+            "importance": 1.0,
+            "class_name": "coordinates",
+            "type_name": "manual",
+            "bbox": {
+                "north": lat,
+                "south": lat,
+                "east": lon,
+                "west": lon,
+            },
+        }
+
+    def _normalize_candidate_selection(self, selection: dict[str, Any]) -> dict[str, Any]:
+        if selection.get("candidate_query") is None and selection.get("display_name") is None:
+            raise IngestionError("No location candidate selected.")
+
+        if selection.get("match_mode") == "point" and selection.get("class_name") == "coordinates":
+            coordinate = self._parse_coordinate_query(selection.get("candidate_query", ""))
+            if coordinate is None:
+                lat = float(selection["lat"])
+                lon = float(selection["lon"])
+                coordinate = (lat, lon)
+            return self._coordinate_candidate(selection.get("candidate_query", ""), coordinate)
+
+        candidate_query = str(selection.get("candidate_query") or selection.get("display_name") or "")
+        which_result = int(selection.get("which_result") or 1)
+        display_name = selection.get("display_name") or candidate_query
+        return {
+            "id": selection.get("id") or self._candidate_identifier(candidate_query, which_result, selection.get("osm_type"), self._coerce_optional_int(selection.get("osm_id"))),
+            "candidate_query": candidate_query,
+            "which_result": which_result,
+            "display_name": str(display_name),
+            "lat": float(selection.get("lat")),
+            "lon": float(selection.get("lon")),
+            "geometry_type": selection.get("geometry_type") or "Unknown",
+            "match_mode": selection.get("match_mode") or "point",
+            "osm_type": selection.get("osm_type"),
+            "osm_id": self._coerce_optional_int(selection.get("osm_id")),
+            "importance": float(selection.get("importance") or 0.0),
+            "class_name": selection.get("class_name"),
+            "type_name": selection.get("type_name"),
+            "bbox": selection.get("bbox") or {},
+        }
+
+    def _candidate_identifier(
+        self,
+        candidate_query: str,
+        which_result: int,
+        osm_type: str | None,
+        osm_id: int | None,
+    ) -> str:
+        osm_type_part = osm_type or "none"
+        osm_id_part = str(osm_id) if osm_id is not None else "none"
+        return f"{candidate_query}|{which_result}|{osm_type_part}|{osm_id_part}"
+
+    def _candidate_key(self, candidate: dict[str, Any]) -> str:
+        if candidate.get("osm_type") and candidate.get("osm_id") is not None:
+            return f"{candidate['osm_type']}:{candidate['osm_id']}"
+        return candidate["id"]
+
+    def _row_text(self, row, key: str) -> str | None:
+        value = row.get(key)
+        if value is None:
+            return None
+        return str(value)
+
+    def _coerce_optional_int(self, value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            if str(value).lower() == "nan":
+                return None
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     def _candidate_queries(self, query: str) -> list[str]:
         base_query = query.strip()

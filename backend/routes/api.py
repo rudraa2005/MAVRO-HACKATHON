@@ -4,9 +4,11 @@ from flask import Blueprint, current_app, jsonify, request
 
 from backend.models import POI, RoadSegment, Vehicle, VehicleHistory
 from backend.services.bootstrap import bootstrap_input_layer
+from backend.services.direction_intelligence import direction_intelligence_service
 from backend.services.input_layer import FlowGuardInputLayer
 from backend.services.ml_layer import live_traffic_intelligence
-from backend.services.osm_ingestion import IngestionError
+from backend.services.map_matching import map_matching_service
+from backend.services.osm_ingestion import IngestionError, osm_ingestion_service
 from backend.simulation.engine import simulation_engine
 
 
@@ -84,7 +86,86 @@ def summary():
         "simulation_running": simulation_engine.is_running(),
         "simulation_interval_seconds": current_app.config["SIMULATION_INTERVAL_SECONDS"],
         "poll_interval_ms": current_app.config["FRONTEND_POLL_INTERVAL_MS"],
+        "map_matching_ready": RoadSegment.query.count() > 0,
     }
+
+
+@api_bp.post("/map-match")
+def map_match_points():
+    payload = request.get_json(silent=True) or {}
+    points = payload.get("points")
+    if isinstance(points, dict):
+        points = [points]
+    if not isinstance(points, list) or not points:
+        return jsonify({"error": 'Provide "points" as a non-empty array.'}), 400
+
+    candidate_limit = int(
+        payload.get("candidate_limit", current_app.config["MAP_MATCH_CANDIDATE_LIMIT"])
+    )
+    distance_threshold_m = float(
+        payload.get(
+            "distance_threshold_m",
+            current_app.config["MAP_MATCH_DISTANCE_THRESHOLD_M"],
+        )
+    )
+    max_jump_speed_mps = float(
+        payload.get(
+            "max_jump_speed_mps",
+            current_app.config["MAP_MATCH_MAX_JUMP_SPEED_MPS"],
+        )
+    )
+
+    try:
+        matches = map_matching_service.match_payloads(
+            payloads=points,
+            candidate_limit=candidate_limit,
+            distance_threshold_m=distance_threshold_m,
+            max_jump_speed_mps=max_jump_speed_mps,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({"error": f"Invalid map-match payload: {exc}"}), 400
+
+    return jsonify(
+        {
+            "matches": matches,
+            "stats": {
+                "points": len(points),
+                "matched": sum(1 for match in matches if match["matched_edge_id"] is not None),
+                "postgis_candidate_sql": map_matching_service.postgis_candidate_sql(
+                    candidate_limit=candidate_limit,
+                    distance_threshold_m=distance_threshold_m,
+                ),
+            },
+        }
+    )
+
+
+@api_bp.get("/map-match/live")
+def map_match_live():
+    limit = request.args.get("limit", type=int)
+    candidate_limit = request.args.get(
+        "candidate_limit",
+        default=current_app.config["MAP_MATCH_CANDIDATE_LIMIT"],
+        type=int,
+    )
+    distance_threshold_m = request.args.get(
+        "distance_threshold_m",
+        default=current_app.config["MAP_MATCH_DISTANCE_THRESHOLD_M"],
+        type=float,
+    )
+    max_jump_speed_mps = request.args.get(
+        "max_jump_speed_mps",
+        default=current_app.config["MAP_MATCH_MAX_JUMP_SPEED_MPS"],
+        type=float,
+    )
+    return jsonify(
+        map_matching_service.match_live_vehicles(
+            candidate_limit=candidate_limit,
+            distance_threshold_m=distance_threshold_m,
+            max_jump_speed_mps=max_jump_speed_mps,
+            limit=limit,
+        )
+    )
 
 
 @api_bp.post("/admin/bootstrap")
@@ -94,16 +175,31 @@ def admin_bootstrap():
     query_type = payload.get("query_type", "auto")
     radius_m = int(payload.get("radius_m", 700))
     reset = bool(payload.get("reset", False))
+    selection = payload.get("selection")
     try:
         summary = bootstrap_input_layer(
             query=query,
             query_type=query_type,
             radius_m=radius_m,
             reset=reset,
+            selection=selection,
         )
     except IngestionError as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify(summary), 202
+
+
+@api_bp.post("/admin/location-search")
+def admin_location_search():
+    payload = request.get_json(silent=True) or {}
+    query = str(payload.get("query") or "").strip()
+    limit = max(1, min(int(payload.get("limit", 5)), 8))
+    try:
+        result = osm_ingestion_service.search_candidates(query=query, limit=limit)
+    except IngestionError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify(result), 200
 
 
 @api_bp.post("/admin/simulation/start")
@@ -125,6 +221,8 @@ def admin_start_simulation():
 def admin_stop_simulation():
     simulation_engine.stop()
     simulation_engine.clear_fleet(current_app._get_current_object())
+    map_matching_service.invalidate_cache()
+    direction_intelligence_service.invalidate_cache()
     return jsonify(
         {
             "simulation_running": simulation_engine.is_running(),
@@ -132,6 +230,37 @@ def admin_stop_simulation():
             "roads": RoadSegment.query.count(),
         }
     ), 202
+
+
+@api_bp.post("/admin/map-match/benchmark")
+def admin_map_match_benchmark():
+    payload = request.get_json(silent=True) or {}
+    points = int(payload.get("points", 1000))
+    candidate_limit = int(
+        payload.get("candidate_limit", current_app.config["MAP_MATCH_CANDIDATE_LIMIT"])
+    )
+    distance_threshold_m = float(
+        payload.get(
+            "distance_threshold_m",
+            current_app.config["MAP_MATCH_DISTANCE_THRESHOLD_M"],
+        )
+    )
+    max_jump_speed_mps = float(
+        payload.get(
+            "max_jump_speed_mps",
+            current_app.config["MAP_MATCH_MAX_JUMP_SPEED_MPS"],
+        )
+    )
+    try:
+        result = map_matching_service.benchmark(
+            points_count=max(1, min(points, 10000)),
+            candidate_limit=candidate_limit,
+            distance_threshold_m=distance_threshold_m,
+            max_jump_speed_mps=max_jump_speed_mps,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(result), 200
 
 
 @api_bp.post("/admin/scenarios/wrong-way")
@@ -152,3 +281,31 @@ def admin_wrong_way_scenario():
         return jsonify({"error": str(exc)}), 400
 
     return jsonify(result), 202
+
+
+@api_bp.get("/direction/live")
+def direction_live():
+    candidate_limit = request.args.get(
+        "candidate_limit",
+        default=current_app.config["MAP_MATCH_CANDIDATE_LIMIT"],
+        type=int,
+    )
+    distance_threshold_m = request.args.get(
+        "distance_threshold_m",
+        default=current_app.config["MAP_MATCH_DISTANCE_THRESHOLD_M"],
+        type=float,
+    )
+    max_jump_speed_mps = request.args.get(
+        "max_jump_speed_mps",
+        default=current_app.config["MAP_MATCH_MAX_JUMP_SPEED_MPS"],
+        type=float,
+    )
+    limit = request.args.get("limit", type=int)
+    return jsonify(
+        direction_intelligence_service.analyze_live_vehicles(
+            candidate_limit=candidate_limit,
+            distance_threshold_m=distance_threshold_m,
+            max_jump_speed_mps=max_jump_speed_mps,
+            limit=limit,
+        )
+    )

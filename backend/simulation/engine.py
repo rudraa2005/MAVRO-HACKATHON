@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import random
 import threading
@@ -293,8 +293,13 @@ class VehicleSimulationEngine:
 
             now = time.time()
             vehicles = Vehicle.query.order_by(Vehicle.id).all()
-            if not vehicles:
-                self._ensure_vehicle_pool(now, vehicles=[])
+
+            # BOOST DENSITY: Ensure at least 40 vehicles for a "busy" scenario
+            if len(vehicles) < 40:
+                original_count = app.config["VEHICLE_COUNT"]
+                app.config["VEHICLE_COUNT"] = 40
+                self._ensure_vehicle_pool(now, vehicles=vehicles)
+                app.config["VEHICLE_COUNT"] = original_count
                 vehicles = Vehicle.query.order_by(Vehicle.id).all()
 
             vehicle = self._select_demo_vehicle(vehicles, vehicle_id)
@@ -311,7 +316,20 @@ class VehicleSimulationEngine:
             vehicle.progress_m = max(segment.length_m * 0.85, min(segment.length_m, 12.0))
             vehicle.wrong_way = True
             vehicle.wrong_way_until = now + demo_duration
-            vehicle.speed_mps = max(self._compute_speed(segment, vehicle.behavior) * 0.8, 4.0)
+            vehicle.speed_mps = max(self._compute_speed(segment, vehicle.behavior) * 0.8, 5.0)
+
+            # ORCHESTRATE COLLISION: Find another vehicle and put it on the same segment moving forward
+            target_vehicle = next((v for v in vehicles if v.id != vehicle.id and not v.wrong_way), None)
+            if target_vehicle:
+                target_vehicle.road_segment_id = segment.id
+                target_vehicle.direction = 1
+                target_vehicle.progress_m = 0.0 # Start at the beginning of segment
+                target_vehicle.speed_mps = max(self._compute_speed(segment, target_vehicle.behavior) * 0.9, 6.0)
+
+                t_lat, t_lon, t_bearing = self._state_from_segment(segment, target_vehicle.progress_m, 1)
+                target_vehicle.lat, target_vehicle.lon = add_noise(t_lat, t_lon, 2.0, rng=self._rng)
+                target_vehicle.bearing = t_bearing
+                target_vehicle.timestamp = now
 
             lat, lon, bearing = self._state_from_segment(
                 segment,
@@ -324,7 +342,8 @@ class VehicleSimulationEngine:
             vehicle.bearing = bearing
             vehicle.timestamp = now
 
-            db.session.add(
+            # Ensure both are in history
+            h_rows = [
                 VehicleHistory(
                     vehicle_id=vehicle.id,
                     road_segment_id=vehicle.road_segment_id,
@@ -334,11 +353,26 @@ class VehicleSimulationEngine:
                     bearing=vehicle.bearing,
                     timestamp=vehicle.timestamp,
                 )
-            )
+            ]
+            if target_vehicle:
+                h_rows.append(
+                    VehicleHistory(
+                        vehicle_id=target_vehicle.id,
+                        road_segment_id=target_vehicle.road_segment_id,
+                        lat=target_vehicle.lat,
+                        lon=target_vehicle.lon,
+                        speed_mps=target_vehicle.speed_mps,
+                        bearing=target_vehicle.bearing,
+                        timestamp=target_vehicle.timestamp,
+                    )
+                )
+
+            db.session.add_all(h_rows)
             db.session.commit()
 
             return {
                 "vehicle_id": vehicle.id,
+                "target_vehicle_id": target_vehicle.id if target_vehicle else None,
                 "road_segment_id": segment.id,
                 "duration_seconds": demo_duration,
                 "wrong_way": True,

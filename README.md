@@ -135,3 +135,5 @@ POIs returned by `GET /api/pois`:
 - Coordinates remain in WGS84 latitude/longitude.
 - Timestamps are stored as UNIX seconds.
 - The simulator is stateful; the HTTP APIs are read-only and stateless.
+
+updated

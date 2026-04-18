@@ -40,6 +40,9 @@ def create_app() -> Flask:
     register_cli_commands(app)
 
     with app.app_context():
+        if "postgresql" in app.config["SQLALCHEMY_DATABASE_URI"]:
+            db.session.execute(db.text("CREATE EXTENSION IF NOT EXISTS postgis"))
+            db.session.commit()
         db.create_all()
         ensure_input_data(app)
 
