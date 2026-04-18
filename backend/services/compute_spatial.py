@@ -66,6 +66,8 @@ def compute_spatial(vehicles: list[dict[str, Any]]) -> list[dict[str, Any]]:
         vehicle["ttc"] = None
         vehicle["risk"] = "safe"
         vehicle["collision_with"] = None
+        vehicle["nearby_count"] = 0
+        vehicle["closest_dist"] = None
         prepared.append(
             {
                 "vehicle": vehicle,
@@ -89,6 +91,18 @@ def compute_spatial(vehicles: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if distance > MAX_INTERACTION_DISTANCE_M:
                 continue
 
+            # Update interaction metrics
+            a = vehicle_a["vehicle"]
+            b = vehicle_b["vehicle"]
+            
+            a["nearby_count"] += 1
+            b["nearby_count"] += 1
+            
+            if a["closest_dist"] is None or distance < a["closest_dist"]:
+                a["closest_dist"] = round(distance, 1)
+            if b["closest_dist"] is None or distance < b["closest_dist"]:
+                b["closest_dist"] = round(distance, 1)
+
             dvx = vehicle_b["vx"] - vehicle_a["vx"]
             dvy = vehicle_b["vy"] - vehicle_a["vy"]
             dot = dx * dvx + dy * dvy
@@ -102,9 +116,6 @@ def compute_spatial(vehicles: list[dict[str, Any]]) -> list[dict[str, Any]]:
             ttc = -dot / rel_speed_sq
             risk = _risk_from_ttc(ttc)
             rounded_ttc = round(ttc, 2)
-
-            a = vehicle_a["vehicle"]
-            b = vehicle_b["vehicle"]
 
             if a["ttc"] is None or ttc < float(a["ttc"]):
                 a["ttc"] = rounded_ttc

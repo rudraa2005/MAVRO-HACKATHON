@@ -129,6 +129,12 @@ class DirectionIntelligenceService:
                 semantic_class = "wrong_way"
             elif result_dict["temporal_state"] == "SUSPECT":
                 semantic_class = "risky"
+            # Enrichment
+            variance = result_dict.get("variance", 0.0)
+            maneuverability = max(0.0, 10.0 - (variance * 20.0))
+            anomaly_score = min(10.0, variance * 50.0)
+            poi_density = 4.2 if vehicle.road_segment_id % 3 == 0 else 1.8 # Synthetic POI density
+
             result_dict.update(
                 {
                     "id": vehicle.id,
@@ -142,6 +148,9 @@ class DirectionIntelligenceService:
                     "behavior": vehicle.behavior,
                     "semantic_class": semantic_class,
                     "class": semantic_class,
+                    "maneuverability": round(maneuverability, 2),
+                    "anomaly_score": round(anomaly_score, 2),
+                    "poi_density": poi_density,
                 }
             )
             direction_results.append(result_dict)
