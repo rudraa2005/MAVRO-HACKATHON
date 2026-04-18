@@ -2162,3 +2162,8 @@ Press CTRL+C to quit
 127.0.0.1 - - [18/Apr/2026 16:28:42] "GET /api/vehicles HTTP/1.1" 200 -
 127.0.0.1 - - [18/Apr/2026 16:28:42] "GET /api/direction/live HTTP/1.1" 200 -
 127.0.0.1 - - [18/Apr/2026 16:28:42] "GET /api/direction/live HTTP/1.1" 200 -
+127.0.0.1 - - [18/Apr/2026 16:29:42] "GET /api/direction/live HTTP/1.1" 200 -
+127.0.0.1 - - [18/Apr/2026 16:29:42] "GET /api/summary HTTP/1.1" 200 -
+127.0.0.1 - - [18/Apr/2026 16:29:42] "GET /api/summary HTTP/1.1" 200 -
+127.0.0.1 - - [18/Apr/2026 16:29:42] "GET /api/vehicles HTTP/1.1" 200 -
+127.0.0.1 - - [18/Apr/2026 16:29:42] "GET /api/direction/live HTTP/1.1" 200 -

@@ -261,6 +261,7 @@ def compute_spatial(vehicles: list[dict[str, Any]]) -> list[dict[str, Any]]:
         vehicle["ttc"] = None
         vehicle["risk"] = "safe"
         vehicle["collision_with"] = None
+<<<<<<< HEAD
         vehicle["distance"] = None
         vehicle["relative_speed"] = 0.0
         vehicle["collision_probability"] = 0.0
@@ -322,6 +323,19 @@ def compute_spatial(vehicles: list[dict[str, Any]]) -> list[dict[str, Any]]:
             prepared_a,
             prepared_b,
             n=DEFAULT_MONTE_CARLO_SIMS,
+=======
+        vehicle["nearby_count"] = 0
+        vehicle["closest_dist"] = None
+        prepared.append(
+            {
+                "vehicle": vehicle,
+                "id": _vehicle_id(vehicle),
+                "x": x,
+                "y": y,
+                "vx": vx,
+                "vy": vy,
+            }
+>>>>>>> 28018adc008a8d9672711675cac38fd420dd4095
         )
 
         if _should_replace_pair(
@@ -350,9 +364,29 @@ def compute_spatial(vehicles: list[dict[str, Any]]) -> list[dict[str, Any]]:
             vehicle_b["collision_probability"] = round(collision_probability, 4)
             vehicle_b["uncertainty"] = round(uncertainty, 4)
 
+<<<<<<< HEAD
         if prepared_a["id"] is not None and prepared_b["id"] is not None:
             collision_graph[prepared_a["id"]].append(prepared_b["id"])
             collision_graph[prepared_b["id"]].append(prepared_a["id"])
+=======
+            # Update interaction metrics
+            a = vehicle_a["vehicle"]
+            b = vehicle_b["vehicle"]
+            
+            a["nearby_count"] += 1
+            b["nearby_count"] += 1
+            
+            if a["closest_dist"] is None or distance < a["closest_dist"]:
+                a["closest_dist"] = round(distance, 1)
+            if b["closest_dist"] is None or distance < b["closest_dist"]:
+                b["closest_dist"] = round(distance, 1)
+
+            dvx = vehicle_b["vx"] - vehicle_a["vx"]
+            dvy = vehicle_b["vy"] - vehicle_a["vy"]
+            dot = dx * dvx + dy * dvy
+            if dot >= 0.0:
+                continue
+>>>>>>> 28018adc008a8d9672711675cac38fd420dd4095
 
     cluster_sizes = _cluster_sizes(collision_graph)
 
@@ -363,6 +397,7 @@ def compute_spatial(vehicles: list[dict[str, Any]]) -> list[dict[str, Any]]:
             vehicle["collision_neighbors"] = neighbors
             vehicle["cluster_size"] = cluster_sizes.get(vehicle_id, 1)
 
+<<<<<<< HEAD
         counterpart_id = vehicle.get("collision_with")
         counterpart = vehicle_lookup.get(int(counterpart_id)) if counterpart_id is not None else None
         action_result = simulate_actions(vehicle, counterpart=counterpart)
@@ -371,6 +406,17 @@ def compute_spatial(vehicles: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
         if vehicle["ttc"] is not None:
             vehicle["time_to_action"] = round(float(vehicle["ttc"]) - DEFAULT_REACTION_TIME_S, 2)
+=======
+            if a["ttc"] is None or ttc < float(a["ttc"]):
+                a["ttc"] = rounded_ttc
+                a["risk"] = risk
+                a["collision_with"] = vehicle_b["id"]
+
+            if b["ttc"] is None or ttc < float(b["ttc"]):
+                b["ttc"] = rounded_ttc
+                b["risk"] = risk
+                b["collision_with"] = vehicle_a["id"]
+>>>>>>> 28018adc008a8d9672711675cac38fd420dd4095
 
     return vehicles
 
