@@ -143,12 +143,14 @@ class LogisticRiskModel:
         weights = np.zeros(Xn.shape[1], dtype=float)
         bias = 0.0
         n = float(samples)
+        lambda_reg = 0.01  # L2 regularization coefficient
 
         for _ in range(epochs):
             logits = Xn @ weights + bias
             preds = 1.0 / (1.0 + np.exp(-logits))
             error = preds - y
-            grad_w = (Xn.T @ error) / n
+            # Gradient of MSE/BCE + L2 penalty
+            grad_w = (Xn.T @ error) / n + lambda_reg * weights
             grad_b = float(np.mean(error))
             weights -= learning_rate * grad_w
             bias -= learning_rate * grad_b

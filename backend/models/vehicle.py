@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from backend.extensions import db
+from sqlalchemy import orm
 
 
 class Vehicle(db.Model):
@@ -30,6 +31,34 @@ class Vehicle(db.Model):
     maneuverability = db.Column(db.Float, nullable=False, default=1.0)
     nearby_count = db.Column(db.Integer, nullable=False, default=0)
     closest_distance_m = db.Column(db.Float, nullable=True)
+
+    # Polymorphic inheritance
+    type = db.Column(db.String(50))
+
+    # Advanced Analysis Fields
+    behavioral_signature = db.Column(db.JSON, nullable=True)
+    intent_classification = db.Column(db.String(64), nullable=True)
+    confidence_adjustment = db.Column(db.Float, nullable=False, default=0.0)
+    gps_quality_score = db.Column(db.Float, nullable=False, default=1.0)
+    cascade_role = db.Column(db.String(32), nullable=False, default="NONE")
+
+    __mapper_args__ = {
+        "polymorphic_identity": "base_vehicle",
+        "polymorphic_on": type,
+    }
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._init_history()
+
+    @orm.reconstructor
+    def _init_history(self):
+        """Initialize in-memory history buffers."""
+        self.history_timestamps = []
+        self.speed_history = []
+        self.bearing_history = []
+        self.position_history = []
+        self.acceleration_history = []
 
     road_segment = db.relationship("RoadSegment", back_populates="vehicles")
     history = db.relationship(

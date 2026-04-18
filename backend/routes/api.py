@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify, request, Response
 
 from backend.models import POI, RoadSegment, Vehicle, VehicleHistory
 from backend.services.bootstrap import bootstrap_input_layer
 from backend.services.direction_intelligence import direction_intelligence_service
+from backend.services.eval_logger import eval_logger
 from backend.services.evaluation import evaluate_binary_classifier
 from backend.services.input_layer import FlowGuardInputLayer
 from backend.services.ml_layer import live_traffic_intelligence
@@ -114,6 +115,119 @@ def analytics_model_metrics():
 def analytics():
     """Return timeseries data for analytics charts."""
     return jsonify(live_traffic_intelligence.build_analytics_timeseries())
+
+
+@api_bp.get("/analytics/metrics")
+def analytics_metrics():
+    """Real-time evaluation metrics derived from the ground-truth log buffer.
+
+    Query params
+    ------------
+    threshold : float  (default: EVAL_WRONG_WAY_THRESHOLD from config)
+        Decision threshold applied to wrong_way_probability.
+    format    : str    ('json' | 'csv')  default: 'json'
+        Return raw log data as CSV instead of metrics JSON.
+    clear     : bool   (0|1)  default: 0
+        Flush the log buffer after responding.
+    """
+    threshold = request.args.get(
+        "threshold",
+        default=current_app.config.get("EVAL_WRONG_WAY_THRESHOLD", 0.65),
+        type=float,
+    )
+    threshold = float(max(0.0, min(1.0, threshold)))
+    fmt = request.args.get("format", default="json").lower()
+    do_clear = request.args.get("clear", default="0").lower() in {"1", "true", "yes"}
+
+    # Apply threshold for this request (does not permanently change the logger)
+    from backend.services.eval_logger import EvalLogger, BUFFER_MAXLEN
+    temp_logger = EvalLogger(maxlen=BUFFER_MAXLEN, threshold=threshold)
+    logs = eval_logger.get_logs()   # snapshot — list copy, thread-safe
+    # Re-apply threshold to snapshot so metrics match the requested threshold
+    from backend.services.eval_logger import EvalRecord
+    re_thresholded = [
+        EvalRecord(
+            timestamp=r.timestamp,
+            vehicle_id=r.vehicle_id,
+            wrong_way_probability=r.wrong_way_probability,
+            predicted_label=1 if r.wrong_way_probability >= threshold else 0,
+            ground_truth_label=r.ground_truth_label,
+        )
+        for r in logs
+    ]
+
+    if fmt == "csv":
+        csv_data = eval_logger.dump_csv(re_thresholded)
+        if do_clear:
+            eval_logger.clear()
+        return Response(
+            csv_data,
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment; filename=eval_log.csv"},
+        )
+
+    result = temp_logger.compute_confusion_matrix(re_thresholded)
+    result["buffer_size"] = len(logs)
+    result["buffer_maxlen"] = BUFFER_MAXLEN
+    result["log_window"] = {
+        "oldest_ts": round(logs[0].timestamp, 3) if logs else None,
+        "newest_ts": round(logs[-1].timestamp, 3) if logs else None,
+    }
+
+    if do_clear:
+        eval_logger.clear()
+
+    return jsonify(result)
+
+
+@api_bp.get("/analytics/roc")
+def analytics_roc():
+    """ROC curve and AUC from the ground-truth evaluation log buffer.
+
+    Query params
+    ------------
+    n         : int   (default: 50)  Number of threshold points.
+    clear     : bool  (0|1)          Flush the buffer after responding.
+    """
+    from backend.services.eval_logger import BUFFER_MAXLEN, ROC_POINTS
+
+    n = request.args.get("n", default=ROC_POINTS, type=int)
+    n = max(2, min(n, 500))
+    do_clear = request.args.get("clear", default="0").lower() in {"1", "true", "yes"}
+
+    logs = eval_logger.get_logs()
+    result = eval_logger.compute_roc_auc(logs=logs, n_thresholds=n)
+
+    result["buffer_size"] = len(logs)
+    result["buffer_maxlen"] = BUFFER_MAXLEN
+    result["log_window"] = {
+        "oldest_ts": round(logs[0].timestamp, 3) if logs else None,
+        "newest_ts": round(logs[-1].timestamp, 3) if logs else None,
+    }
+
+    if do_clear:
+        eval_logger.clear()
+
+    return jsonify(result)
+
+
+@api_bp.get("/analytics/optimal-threshold")
+def analytics_optimal_threshold():
+    """Compute the optimal decision threshold via Youden's J statistic.
+
+    Query params
+    ------------
+    n     : int   (default: 50)  Number of ROC threshold points.
+    apply : bool  (0|1)          Apply the optimal threshold to the live system.
+    """
+    from backend.services.eval_logger import ROC_POINTS
+
+    n = request.args.get("n", default=ROC_POINTS, type=int)
+    n = max(2, min(n, 500))
+    do_apply = request.args.get("apply", default="0").lower() in {"1", "true", "yes"}
+
+    result = eval_logger.optimal_threshold(n_thresholds=n, apply=do_apply)
+    return jsonify(result)
 
 
 @api_bp.get("/risk-monitor")

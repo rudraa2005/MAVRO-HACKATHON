@@ -22,6 +22,8 @@ from backend.services.geo import (
     interpolate_path_position,
     path_bearing_at,
 )
+from backend.services.eval_logger import eval_logger
+from backend.services.semantic_reasoning import sigmoid_confidence
 
 
 # ---------------------------------------------------------------------------
@@ -494,14 +496,19 @@ class VehicleSimulationEngine:
         for v in self._vehicles.values():
             snap_vehicles.append({
                 "id": v.db_id,
+                "db_id": v.db_id,
                 "wwp": round(v.wwp, 3),
                 "ttc": round(v.ttc, 1) if v.ttc is not None else None,
                 "risk": round(v.risk_score, 3),
                 "anomaly": round(v.anomaly_score, 3),
                 "wrong_way": v.wrong_way,
                 "speed": round(v.speed_mps, 2),
+                "timestamp": now,
             })
         self._analytics.push(TickSnapshot(t=now, vehicles=snap_vehicles))
+
+        # Log ground-truth-labeled data for evaluation pipeline
+        eval_logger.log_frame(snap_vehicles)
 
         # Flush to DB
         self._flush_to_db()
@@ -1176,37 +1183,57 @@ class VehicleSimulationEngine:
         stability_score = max(0.0, min(1.0, 1.0 - (heading_var / 2500.0)))
         v.gps_stability = "HIGH" if stability_score > 0.75 else "MEDIUM" if stability_score > 0.45 else "LOW"
 
-        dir_score = max(0.0, min(1.0, v.angle_diff_deg / 180.0))
+        dir_score     = max(0.0, min(1.0, v.angle_diff_deg / 180.0))
         duration_score = max(0.0, min(1.0, duration / 5.0))
-        speed_score = 1.0 if v.speed_mps > 5.0 else 0.5
-        weight = 1.2 if segment.road_class in {"motorway", "trunk", "primary"} else 1.0
-        confidence = (
-            0.4 * dir_score +
-            0.2 * duration_score +
-            0.2 * speed_score +
-            0.2 * stability_score
-        ) * weight
 
+        # direction_similarity = cos(angle_diff) ∈ [-1, 1]
+        direction_similarity = math.cos(math.radians(min(v.angle_diff_deg, 180.0)))
+
+        # Normalised heading variance ∈ [0, 1] (used as temporal_variance suppressor)
+        variance_norm = max(0.0, min(1.0, heading_var / 2500.0))
+
+        # Edge-case attenuation: scale dev_time and speed inputs so sigmoid
+        # naturally reduces confidence without any ad-hoc multipliers.
+        effective_duration = duration
+        effective_speed    = v.speed_mps
         if edge_case == "INTERSECTION_TURN":
-            confidence *= 0.55
+            effective_duration *= 0.4         # short duration counts less at intersections
+            effective_speed    *= 0.4
         elif edge_case in {"ROUNDABOUT", "GPS_GAP"}:
-            confidence *= 0.25
+            effective_duration  = 0.0         # treat as no evidence
+            effective_speed     = 0.0
         elif edge_case == "DIVIDED_HIGHWAY":
-            confidence *= 0.8
+            effective_duration *= 0.85
 
-        # Two-way roads require stronger confidence to avoid false positives.
-        if not segment.oneway and confidence < 0.85:
-            confidence *= 0.6
+        # Two-way roads: require stronger sustained evidence
+        if not segment.oneway:
+            effective_duration *= 0.55
 
+        # Compute smooth sigmoid confidence
+        confidence = sigmoid_confidence(
+            direction_similarity=direction_similarity,
+            dev_time=effective_duration,
+            speed=effective_speed,
+            temporal_variance=variance_norm,
+        )
+
+        # Wrong-way override: ramp confidence up using elapsed time as dev_time input
         if v.wrong_way:
             total = float(self._app.config.get("WRONG_WAY_DURATION_SECONDS", 30))
             if v.wrong_way_until is not None:
                 elapsed = max(0.0, total - max(v.wrong_way_until - now, 0.0))
-                confidence = max(confidence, min(1.0, 0.35 + (elapsed / 5.0) * 0.5))
             else:
-                confidence = max(confidence, 0.8)
+                elapsed = total
+            boosted = sigmoid_confidence(
+                direction_similarity=-1.0,       # maximum opposition
+                dev_time=elapsed,
+                speed=v.speed_mps,
+                temporal_variance=variance_norm,
+            )
+            confidence = max(confidence, boosted)
 
         v.confidence = max(0.0, min(1.0, confidence))
+
 
 
 simulation_engine = VehicleSimulationEngine()
