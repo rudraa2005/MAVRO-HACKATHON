@@ -21,6 +21,16 @@ class Vehicle(db.Model):
     wrong_way_until = db.Column(db.Float, nullable=True)
     behavior = db.Column(db.String(32), nullable=False, default="normal")
 
+    # ML metric columns
+    state = db.Column(db.String(16), nullable=False, default="normal")
+    anomaly_score = db.Column(db.Float, nullable=False, default=0.0)
+    risk_score = db.Column(db.Float, nullable=False, default=0.0)
+    wwp = db.Column(db.Float, nullable=False, default=0.0)
+    ttc = db.Column(db.Float, nullable=True)
+    maneuverability = db.Column(db.Float, nullable=False, default=1.0)
+    nearby_count = db.Column(db.Integer, nullable=False, default=0)
+    closest_distance_m = db.Column(db.Float, nullable=True)
+
     road_segment = db.relationship("RoadSegment", back_populates="vehicles")
     history = db.relationship(
         "VehicleHistory",
@@ -40,6 +50,18 @@ class Vehicle(db.Model):
             "road_segment_id": self.road_segment_id,
             "wrong_way": self.wrong_way,
             "behavior": self.behavior,
+            "state": self.state,
+            "anomaly_score": round(self.anomaly_score, 3),
+            "risk_score": round(self.risk_score, 3),
+            "wwp": round(self.wwp, 3),
+            "ttc": round(self.ttc, 1) if self.ttc is not None else None,
+            "maneuverability": round(self.maneuverability, 3),
+            "nearby_count": self.nearby_count,
+            "closest_distance_m": (
+                round(self.closest_distance_m, 1)
+                if self.closest_distance_m is not None
+                else None
+            ),
         }
 
 

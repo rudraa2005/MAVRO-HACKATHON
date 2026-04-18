@@ -31,19 +31,21 @@ def health() -> tuple[dict, int]:
 @api_bp.get("/roads")
 def roads():
     only_oneway = request.args.get("only_oneway", default="false").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
+        "1", "true", "yes", "on",
     }
     segments = input_layer.get_road_segments()
     if only_oneway:
-        segments = [segment for segment in segments if segment["oneway"]]
+        segments = [s for s in segments if s["oneway"]]
     return jsonify(segments)
 
 
 @api_bp.get("/vehicles")
 def vehicles():
+    """Return vehicle data. Uses in-memory engine state for speed."""
+    snapshot = simulation_engine.get_vehicles_snapshot()
+    if snapshot:
+        return jsonify(snapshot)
+    # Fallback to DB if engine has no vehicles
     return jsonify(list(input_layer.get_vehicle_updates()))
 
 
@@ -108,6 +110,18 @@ def analytics_model_metrics():
     return jsonify(payload)
 
 
+@api_bp.get("/analytics")
+def analytics():
+    """Return timeseries data for analytics charts."""
+    return jsonify(live_traffic_intelligence.build_analytics_timeseries())
+
+
+@api_bp.get("/risk-monitor")
+def risk_monitor():
+    """Return data for the risk monitor page."""
+    return jsonify(live_traffic_intelligence.build_risk_monitor())
+
+
 @api_bp.get("/pois")
 def pois():
     return jsonify(input_layer.get_pois())
@@ -129,6 +143,7 @@ def summary():
         "simulation_interval_seconds": current_app.config["SIMULATION_INTERVAL_SECONDS"],
         "poll_interval_ms": current_app.config["FRONTEND_POLL_INTERVAL_MS"],
         "map_matching_ready": RoadSegment.query.count() > 0,
+        "vehicle_count_target": current_app.config["VEHICLE_COUNT"],
     }
 
 
@@ -145,16 +160,10 @@ def map_match_points():
         payload.get("candidate_limit", current_app.config["MAP_MATCH_CANDIDATE_LIMIT"])
     )
     distance_threshold_m = float(
-        payload.get(
-            "distance_threshold_m",
-            current_app.config["MAP_MATCH_DISTANCE_THRESHOLD_M"],
-        )
+        payload.get("distance_threshold_m", current_app.config["MAP_MATCH_DISTANCE_THRESHOLD_M"])
     )
     max_jump_speed_mps = float(
-        payload.get(
-            "max_jump_speed_mps",
-            current_app.config["MAP_MATCH_MAX_JUMP_SPEED_MPS"],
-        )
+        payload.get("max_jump_speed_mps", current_app.config["MAP_MATCH_MAX_JUMP_SPEED_MPS"])
     )
 
     try:
@@ -167,47 +176,37 @@ def map_match_points():
     except (KeyError, TypeError, ValueError) as exc:
         return jsonify({"error": f"Invalid map-match payload: {exc}"}), 400
 
-    return jsonify(
-        {
-            "matches": matches,
-            "stats": {
-                "points": len(points),
-                "matched": sum(1 for match in matches if match["matched_edge_id"] is not None),
-                "postgis_candidate_sql": map_matching_service.postgis_candidate_sql(
-                    candidate_limit=candidate_limit,
-                    distance_threshold_m=distance_threshold_m,
-                ),
-            },
-        }
-    )
+    return jsonify({
+        "matches": matches,
+        "stats": {
+            "points": len(points),
+            "matched": sum(1 for m in matches if m["matched_edge_id"] is not None),
+            "postgis_candidate_sql": map_matching_service.postgis_candidate_sql(
+                candidate_limit=candidate_limit,
+                distance_threshold_m=distance_threshold_m,
+            ),
+        },
+    })
 
 
 @api_bp.get("/map-match/live")
 def map_match_live():
     limit = request.args.get("limit", type=int)
     candidate_limit = request.args.get(
-        "candidate_limit",
-        default=current_app.config["MAP_MATCH_CANDIDATE_LIMIT"],
-        type=int,
+        "candidate_limit", default=current_app.config["MAP_MATCH_CANDIDATE_LIMIT"], type=int,
     )
     distance_threshold_m = request.args.get(
-        "distance_threshold_m",
-        default=current_app.config["MAP_MATCH_DISTANCE_THRESHOLD_M"],
-        type=float,
+        "distance_threshold_m", default=current_app.config["MAP_MATCH_DISTANCE_THRESHOLD_M"], type=float,
     )
     max_jump_speed_mps = request.args.get(
-        "max_jump_speed_mps",
-        default=current_app.config["MAP_MATCH_MAX_JUMP_SPEED_MPS"],
-        type=float,
+        "max_jump_speed_mps", default=current_app.config["MAP_MATCH_MAX_JUMP_SPEED_MPS"], type=float,
     )
-    return jsonify(
-        map_matching_service.match_live_vehicles(
-            candidate_limit=candidate_limit,
-            distance_threshold_m=distance_threshold_m,
-            max_jump_speed_mps=max_jump_speed_mps,
-            limit=limit,
-        )
-    )
+    return jsonify(map_matching_service.match_live_vehicles(
+        candidate_limit=candidate_limit,
+        distance_threshold_m=distance_threshold_m,
+        max_jump_speed_mps=max_jump_speed_mps,
+        limit=limit,
+    ))
 
 
 @api_bp.post("/admin/bootstrap")
@@ -220,11 +219,8 @@ def admin_bootstrap():
     selection = payload.get("selection")
     try:
         summary = bootstrap_input_layer(
-            query=query,
-            query_type=query_type,
-            radius_m=radius_m,
-            reset=reset,
-            selection=selection,
+            query=query, query_type=query_type,
+            radius_m=radius_m, reset=reset, selection=selection,
         )
     except IngestionError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -240,7 +236,6 @@ def admin_location_search():
         result = osm_ingestion_service.search_candidates(query=query, limit=limit)
     except IngestionError as exc:
         return jsonify({"error": str(exc)}), 400
-
     return jsonify(result), 200
 
 
@@ -250,13 +245,11 @@ def admin_start_simulation():
         return jsonify({"error": "Load a street area before starting the simulation."}), 400
 
     simulation_engine.start(current_app._get_current_object(), force=True)
-    return jsonify(
-        {
-            "simulation_running": simulation_engine.is_running(),
-            "vehicles": Vehicle.query.count(),
-            "roads": RoadSegment.query.count(),
-        }
-    ), 202
+    return jsonify({
+        "simulation_running": simulation_engine.is_running(),
+        "vehicles": Vehicle.query.count(),
+        "roads": RoadSegment.query.count(),
+    }), 202
 
 
 @api_bp.post("/admin/simulation/stop")
@@ -265,13 +258,39 @@ def admin_stop_simulation():
     simulation_engine.clear_fleet(current_app._get_current_object())
     map_matching_service.invalidate_cache()
     direction_intelligence_service.invalidate_cache()
-    return jsonify(
-        {
-            "simulation_running": simulation_engine.is_running(),
-            "vehicles": Vehicle.query.count(),
-            "roads": RoadSegment.query.count(),
-        }
-    ), 202
+    return jsonify({
+        "simulation_running": simulation_engine.is_running(),
+        "vehicles": Vehicle.query.count(),
+        "roads": RoadSegment.query.count(),
+    }), 202
+
+
+@api_bp.post("/admin/simulation/reset")
+def admin_reset_simulation():
+    """Full reset: stop, clear fleet, reseed, restart."""
+    app = current_app._get_current_object()
+    simulation_engine.stop()
+    simulation_engine.reseed_demo_fleet(app)
+    simulation_engine.start(app, force=True)
+    map_matching_service.invalidate_cache()
+    direction_intelligence_service.invalidate_cache()
+    return jsonify({
+        "simulation_running": simulation_engine.is_running(),
+        "vehicles": Vehicle.query.count(),
+        "roads": RoadSegment.query.count(),
+    }), 202
+
+
+@api_bp.post("/admin/density")
+def admin_set_density():
+    """Adjust vehicle density (count) from the UI slider."""
+    payload = request.get_json(silent=True) or {}
+    count = int(payload.get("count", 30))
+    app = current_app._get_current_object()
+    simulation_engine.set_vehicle_count(app, count)
+    return jsonify({
+        "vehicle_count_target": app.config["VEHICLE_COUNT"],
+    }), 200
 
 
 @api_bp.post("/admin/map-match/benchmark")
@@ -282,16 +301,10 @@ def admin_map_match_benchmark():
         payload.get("candidate_limit", current_app.config["MAP_MATCH_CANDIDATE_LIMIT"])
     )
     distance_threshold_m = float(
-        payload.get(
-            "distance_threshold_m",
-            current_app.config["MAP_MATCH_DISTANCE_THRESHOLD_M"],
-        )
+        payload.get("distance_threshold_m", current_app.config["MAP_MATCH_DISTANCE_THRESHOLD_M"])
     )
     max_jump_speed_mps = float(
-        payload.get(
-            "max_jump_speed_mps",
-            current_app.config["MAP_MATCH_MAX_JUMP_SPEED_MPS"],
-        )
+        payload.get("max_jump_speed_mps", current_app.config["MAP_MATCH_MAX_JUMP_SPEED_MPS"])
     )
     try:
         result = map_matching_service.benchmark(
@@ -328,26 +341,18 @@ def admin_wrong_way_scenario():
 @api_bp.get("/direction/live")
 def direction_live():
     candidate_limit = request.args.get(
-        "candidate_limit",
-        default=current_app.config["MAP_MATCH_CANDIDATE_LIMIT"],
-        type=int,
+        "candidate_limit", default=current_app.config["MAP_MATCH_CANDIDATE_LIMIT"], type=int,
     )
     distance_threshold_m = request.args.get(
-        "distance_threshold_m",
-        default=current_app.config["MAP_MATCH_DISTANCE_THRESHOLD_M"],
-        type=float,
+        "distance_threshold_m", default=current_app.config["MAP_MATCH_DISTANCE_THRESHOLD_M"], type=float,
     )
     max_jump_speed_mps = request.args.get(
-        "max_jump_speed_mps",
-        default=current_app.config["MAP_MATCH_MAX_JUMP_SPEED_MPS"],
-        type=float,
+        "max_jump_speed_mps", default=current_app.config["MAP_MATCH_MAX_JUMP_SPEED_MPS"], type=float,
     )
     limit = request.args.get("limit", type=int)
-    return jsonify(
-        direction_intelligence_service.analyze_live_vehicles(
-            candidate_limit=candidate_limit,
-            distance_threshold_m=distance_threshold_m,
-            max_jump_speed_mps=max_jump_speed_mps,
-            limit=limit,
-        )
-    )
+    return jsonify(direction_intelligence_service.analyze_live_vehicles(
+        candidate_limit=candidate_limit,
+        distance_threshold_m=distance_threshold_m,
+        max_jump_speed_mps=max_jump_speed_mps,
+        limit=limit,
+    ))

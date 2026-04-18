@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% set active_page = "risk" %}
+
+{% block title %}FlowGuard — Risk Monitor{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div class="page-header">
+        <div>
+            <h1 class="page-title">Risk Monitor</h1>
+            <p class="page-subtitle">Active high-risk vehicles, predicted collisions, and alerts</p>
+        </div>
+        <span id="risk-status" class="status-pill">Monitoring...</span>
+    </div>
+
+    <div class="stats-row">
+        <div class="stat-box">
+            <div class="label">Total Vehicles</div>
+            <div class="value" id="risk-total">0</div>
+        </div>
+        <div class="stat-box">
+            <div class="label">High Risk</div>
+            <div class="value" id="risk-high" style="color: var(--danger);">0</div>
+        </div>
+        <div class="stat-box">
+            <div class="label">Wrong-Way</div>
+            <div class="value" id="risk-ww" style="color: var(--warning);">0</div>
+        </div>
+        <div class="stat-box">
+            <div class="label">Critical</div>
+            <div class="value" id="risk-critical" style="color: var(--danger);">0</div>
+        </div>
+    </div>
+
+    <div class="risk-grid">
+        <!-- High risk vehicles table -->
+        <div class="card">
+            <div class="card-title">High-Risk Vehicles</div>
+            <div style="overflow-x: auto;">
+                <table class="data-table" id="risk-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>State</th>
+                            <th>Speed</th>
+                            <th>WWP</th>
+                            <th>TTC</th>
+                            <th>Risk</th>
+                            <th>Anomaly</th>
+                        </tr>
+                    </thead>
+                    <tbody id="risk-table-body">
+                        <tr><td colspan="7" style="text-align:center; color: var(--muted);">No high-risk vehicles.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Predicted collisions -->
+        <div class="card">
+            <div class="card-title">Predicted Collisions</div>
+            <div id="collision-cards">
+                <div class="empty-state">No predicted collisions.</div>
+            </div>
+        </div>
+
+        <!-- Alerts -->
+        <div class="card" style="grid-column: 1 / -1;">
+            <div class="card-title">Active Alerts</div>
+            <div id="alert-feed">
+                <div class="empty-state">No active alerts.</div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/risk.js"></script>
+{% endblock %}

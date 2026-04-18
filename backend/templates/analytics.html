@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% set active_page = "analytics" %}
+
+{% block title %}FlowGuard — Analytics{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div class="page-header">
+        <div>
+            <h1 class="page-title">Analytics</h1>
+            <p class="page-subtitle">Live timeseries of WWP, TTC, and risk evolution</p>
+        </div>
+        <span id="analytics-status" class="status-pill">Waiting for data...</span>
+    </div>
+
+    <div class="stats-row">
+        <div class="stat-box">
+            <div class="label">Max WWP</div>
+            <div class="value" id="stat-wwp">0.000</div>
+        </div>
+        <div class="stat-box">
+            <div class="label">Min TTC</div>
+            <div class="value" id="stat-ttc">—</div>
+        </div>
+        <div class="stat-box">
+            <div class="label">Max Risk</div>
+            <div class="value" id="stat-risk">0.000</div>
+        </div>
+        <div class="stat-box">
+            <div class="label">Data Points</div>
+            <div class="value" id="stat-points">0</div>
+        </div>
+        <div class="stat-box">
+            <div class="label">Precision</div>
+            <div class="value" id="stat-precision">0.000</div>
+        </div>
+        <div class="stat-box">
+            <div class="label">Recall</div>
+            <div class="value" id="stat-recall">0.000</div>
+        </div>
+        <div class="stat-box">
+            <div class="label">FPR</div>
+            <div class="value" id="stat-fpr">0.000</div>
+        </div>
+    </div>
+
+    <div class="analytics-grid">
+        <div class="chart-container">
+            <div class="chart-title">Wrong-Way Probability (WWP) vs Time</div>
+            <canvas id="chart-wwp"></canvas>
+        </div>
+        <div class="chart-container">
+            <div class="chart-title">Time-to-Collision (TTC) vs Time</div>
+            <canvas id="chart-ttc"></canvas>
+        </div>
+        <div class="chart-container">
+            <div class="chart-title">Risk Score Evolution</div>
+            <canvas id="chart-risk"></canvas>
+        </div>
+        <div class="chart-container">
+            <div class="chart-title">ROC Curve (TPR vs FPR)</div>
+            <canvas id="chart-roc"></canvas>
+        </div>
+        <div class="chart-container">
+            <div class="chart-title">Confidence Distribution</div>
+            <canvas id="chart-confidence"></canvas>
+        </div>
+    </div>
+
+    <div class="chart-container" style="margin-top: 12px;">
+        <div class="chart-title">Confusion Matrix</div>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th></th>
+                    <th>Pred Wrong-Way</th>
+                    <th>Pred Normal</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Actual Wrong-Way</td>
+                    <td id="cm-tp">0</td>
+                    <td id="cm-fn">0</td>
+                </tr>
+                <tr>
+                    <td>Actual Normal</td>
+                    <td id="cm-fp">0</td>
+                    <td id="cm-tn">0</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/analytics.js"></script>
+{% endblock %}

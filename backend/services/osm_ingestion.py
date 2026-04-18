@@ -155,6 +155,12 @@ class OSMIngestionService:
                 (float(start_node["lat"]), float(start_node["lon"])),
                 (float(end_node["lat"]), float(end_node["lon"])),
             )
+            oneway_raw = flatten_osm_value(getattr(row, "oneway", None))
+            oneway_direction = self._oneway_direction(oneway_raw)
+            if oneway_direction == "backward":
+                # Normalize one-way backward geometry so stored bearing represents legal direction.
+                path = list(reversed(path))
+                start_node, end_node = end_node, start_node
 
             road_class = flatten_osm_value(getattr(row, "highway", None))
             speed_limit_mps = self._speed_limit_mps(
@@ -182,7 +188,7 @@ class OSMIngestionService:
                         path[-1]["lat"],
                         path[-1]["lon"],
                     ),
-                    oneway=parse_osm_bool(getattr(row, "oneway", False)),
+                    oneway=oneway_direction in {"forward", "backward"},
                     length_m=float(getattr(row, "length", 0.0)),
                     geometry=path,
                     road_class=road_class,
@@ -191,6 +197,18 @@ class OSMIngestionService:
                 )
             )
         return segments
+
+    def _oneway_direction(self, raw_oneway: str | None) -> str:
+        if raw_oneway is None:
+            return "both"
+        value = str(raw_oneway).strip().lower()
+        if value in {"yes", "true", "1", "forward"}:
+            return "forward"
+        if value in {"-1", "backward", "reverse"}:
+            return "backward"
+        if parse_osm_bool(value):
+            return "forward"
+        return "both"
 
     def _resolve_osm_payload(
         self,

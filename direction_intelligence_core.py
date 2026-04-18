@@ -29,7 +29,7 @@ EARTH_RADIUS_M = 6_371_000.0
 # ── data classes ──────────────────────────────────────────────────────────────
 
 
-@dataclass(slots=True)
+@dataclass
 class DirectionProbe:
     """Single vehicle observation fed to the engine."""
 
@@ -43,7 +43,7 @@ class DirectionProbe:
     matched_edge_id: int | None
 
 
-@dataclass(slots=True)
+@dataclass
 class DirectionResult:
     """Output of the direction analysis for one vehicle."""
 

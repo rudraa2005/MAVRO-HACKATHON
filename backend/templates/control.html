@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% set active_page = "control" %}
+
+{% block title %}FlowGuard — Simulation Control{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div class="page-header">
+        <div>
+            <h1 class="page-title">Simulation Control</h1>
+            <p class="page-subtitle">Manage simulation lifecycle, scenarios, and density</p>
+        </div>
+        <span id="ctrl-status" class="status-pill">—</span>
+    </div>
+
+    <div class="stats-row">
+        <div class="stat-box">
+            <div class="label">Status</div>
+            <div class="value" id="ctrl-sim-state">Stopped</div>
+        </div>
+        <div class="stat-box">
+            <div class="label">Vehicles</div>
+            <div class="value" id="ctrl-vehicle-count">0</div>
+        </div>
+        <div class="stat-box">
+            <div class="label">Roads</div>
+            <div class="value" id="ctrl-road-count">0</div>
+        </div>
+        <div class="stat-box">
+            <div class="label">Wrong-Way</div>
+            <div class="value" id="ctrl-ww-count">0</div>
+        </div>
+    </div>
+
+    <div class="control-grid">
+        <!-- Simulation lifecycle -->
+        <div class="card">
+            <div class="card-title">Simulation Lifecycle</div>
+            <p style="color: var(--muted); font-size: 0.85rem; margin-bottom: 12px;">
+                Start, pause, or fully reset the traffic simulation.
+            </p>
+            <div class="btn-group">
+                <button id="btn-start" class="btn btn-primary">Start</button>
+                <button id="btn-stop" class="btn">Stop</button>
+                <button id="btn-reset" class="btn btn-danger">Reset</button>
+            </div>
+        </div>
+
+        <!-- Density control -->
+        <div class="card">
+            <div class="card-title">Vehicle Density</div>
+            <p style="color: var(--muted); font-size: 0.85rem; margin-bottom: 12px;">
+                Adjust the target number of vehicles in the simulation.
+            </p>
+            <div class="form-group">
+                <label class="form-label">Count: <span id="density-value">30</span></label>
+                <input type="range" id="density-slider" class="form-range" min="5" max="40" value="30" step="1">
+            </div>
+        </div>
+
+        <!-- Wrong-way injection -->
+        <div class="card">
+            <div class="card-title">Wrong-Way Injection</div>
+            <p style="color: var(--muted); font-size: 0.85rem; margin-bottom: 12px;">
+                Trigger a wrong-way vehicle to test detection and risk response.
+            </p>
+            <div class="form-group">
+                <label class="form-label">Vehicle ID (optional)</label>
+                <input type="number" id="ww-vehicle-id" class="form-input" placeholder="Auto-select">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Duration (seconds)</label>
+                <input type="number" id="ww-duration" class="form-input" value="45" min="5" max="120">
+            </div>
+            <button id="btn-wrong-way" class="btn btn-danger">Inject Wrong-Way</button>
+        </div>
+
+        <!-- Scenario selector -->
+        <div class="card">
+            <div class="card-title">Scenario Presets</div>
+            <p style="color: var(--muted); font-size: 0.85rem; margin-bottom: 12px;">
+                Load predefined traffic scenarios for demonstration.
+            </p>
+            <div class="btn-group" style="flex-direction: column;">
+                <button class="btn scenario-btn" data-scenario="normal">Normal Flow (30 vehicles)</button>
+                <button class="btn scenario-btn" data-scenario="dense">High Density (40 vehicles)</button>
+                <button class="btn scenario-btn" data-scenario="wrong-way">Wrong-Way + Collision Course</button>
+            </div>
+        </div>
+
+        <!-- Location loader -->
+        <div class="card" style="grid-column: 1 / -1;">
+            <div class="card-title">Load Street Area</div>
+            <p style="color: var(--muted); font-size: 0.85rem; margin-bottom: 12px;">
+                Ingest OpenStreetMap road data for a specific area to populate the simulation.
+            </p>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <div class="form-group" style="flex: 2; min-width: 200px;">
+                    <label class="form-label">Street or Area</label>
+                    <input type="text" id="area-query" class="form-input" value="{{ place_name }}"
+                           placeholder="Anna Salai, Chennai or 13.0827,80.2707">
+                </div>
+                <div class="form-group" style="flex: 0.5; min-width: 100px;">
+                    <label class="form-label">Radius</label>
+                    <select id="area-radius" class="form-select">
+                        <option value="400">400 m</option>
+                        <option value="700" selected>700 m</option>
+                        <option value="1000">1000 m</option>
+                        <option value="1500">1500 m</option>
+                    </select>
+                </div>
+                <div class="form-group" style="align-self: flex-end;">
+                    <button id="btn-load-area" class="btn btn-primary">Load Area</button>
+                </div>
+            </div>
+            <div style="display: flex; gap: 8px; margin-top: 8px;">
+                <button class="btn preset-area" data-query="Anna Salai, Chennai, Tamil Nadu, India">Anna Salai</button>
+                <button class="btn preset-area" data-query="George Town, Chennai, Tamil Nadu, India">Parry's Corner</button>
+                <button class="btn preset-area" data-query="T. Nagar, Chennai, Tamil Nadu, India">T Nagar</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/control.js"></script>
+{% endblock %}

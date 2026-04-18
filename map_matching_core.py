@@ -11,7 +11,7 @@ from shapely.strtree import STRtree
 EARTH_RADIUS_M = 6_371_000.0
 
 
-@dataclass(slots=True)
+@dataclass
 class GPSProbe:
     vehicle_id: str | int | None
     lat: float
@@ -39,7 +39,7 @@ class GPSProbe:
         )
 
 
-@dataclass(slots=True)
+@dataclass
 class PreviousMatchState:
     edge_id: int
     lat: float
@@ -48,7 +48,7 @@ class PreviousMatchState:
     speed_mps: float
 
 
-@dataclass(slots=True)
+@dataclass
 class IndexedEdge:
     edge_id: int
     oneway: bool
@@ -60,7 +60,7 @@ class IndexedEdge:
     ref_lon: float
 
 
-@dataclass(slots=True)
+@dataclass
 class CandidateScore:
     edge_id: int
     distance_error_m: float
@@ -73,7 +73,7 @@ class CandidateScore:
     score: float
 
 
-@dataclass(slots=True)
+@dataclass
 class MapMatchResult:
     vehicle_id: str | int | None
     matched_edge_id: int | None

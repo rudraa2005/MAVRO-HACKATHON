@@ -1,232 +1,289 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FlowGuard Input Layer</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <link
-        rel="stylesheet"
-        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-        crossorigin=""
-    >
-    <link rel="stylesheet" href="../static/css/app.css">
-</head>
-<body data-place="{{ place_name }}" data-poll-interval-ms="{{ poll_interval_ms }}">
-    <main class="shell">
-        <section class="hero">
-            <div>
-                <p class="eyebrow">FlowGuard / Input Layer</p>
-                <h1>Roads, POIs, and live GPS simulation in one real-time surface.</h1>
-                <p class="subcopy">
-                    The backend ingests OpenStreetMap road data for <strong>{{ place_name }}</strong>,
-                    persists it to PostgreSQL, and drives a live vehicle simulation with wrong-way injection.
-                </p>
-            </div>
-            <div class="hero-actions">
-                <div class="control-card">
-                    <label class="field">
-                        <span>Street or Area</span>
-                        <input
-                            id="scenario-query"
-                            type="text"
-                            value="{{ place_name }}"
-                            placeholder="Anna Salai, Chennai, Tamil Nadu, India or 13.0827,80.2707"
-                        >
-                    </label>
-                    <label class="field">
-                        <span>Radius</span>
-                        <select id="scenario-radius">
-                            <option value="400">400 m</option>
-                            <option value="700" selected>700 m</option>
-                            <option value="1000">1000 m</option>
-                            <option value="1500">1500 m</option>
-                        </select>
-                    </label>
-                    <div class="button-row">
-                        <button id="load-street" type="button">Load Street Area</button>
-                        <button id="start-simulation" type="button" class="secondary-button">Start Simulation</button>
-                        <button id="stop-simulation" type="button" class="secondary-button">Stop Simulation</button>
-                        <button id="run-wrong-way" type="button" class="secondary-button">Trigger Wrong-Way</button>
-                    </div>
-                    <div class="preset-row">
-                        <button type="button" class="preset-button" data-query="Anna Salai, Chennai, Tamil Nadu, India">Anna Salai</button>
-                        <button type="button" class="preset-button" data-query="George Town, Chennai, Tamil Nadu, India">Parry's Corner</button>
-                        <button type="button" class="preset-button" data-query="T. Nagar, Chennai, Tamil Nadu, India">T Nagar</button>
-                    </div>
-                </div>
-                <p id="status-pill" class="status-pill">Waiting for first sync</p>
-            </div>
-        </section>
+{% extends "base.html" %}
+{% set active_page = "dashboard" %}
 
-        <section class="stats-grid">
-            <article class="stat-card">
-                <span>Road Segments</span>
-                <strong id="roads-count">0</strong>
-            </article>
-            <article class="stat-card">
-                <span>Vehicles</span>
-                <strong id="vehicles-count">0</strong>
-            </article>
-            <article class="stat-card">
-                <span>Wrong-Way</span>
-                <strong id="wrong-way-count">0</strong>
-            </article>
-            <article class="stat-card">
-                <span>POIs</span>
-                <strong id="pois-count">0</strong>
-            </article>
-        </section>
+{% block title %}FlowGuard — Dashboard{% endblock %}
 
-        <section class="content-grid">
-            <article class="panel map-panel">
-                <div class="panel-heading">
-                    <div>
-                        <p class="panel-title">Live Network View</p>
-                        <p class="panel-subtitle">Load a street area, then trigger a visible wrong-way vehicle on a one-way road</p>
-                    </div>
-                    <div class="legend">
-                        <span><i class="legend-road"></i> Roads</span>
-                        <span><i class="legend-poi"></i> POIs</span>
-                        <span><i class="legend-vehicle"></i> Vehicles</span>
-                        <span><i class="legend-human"></i> Humans</span>
-                        <span><i class="legend-heat"></i> Heat</span>
-                        <span><i class="legend-trajectory"></i> Prediction</span>
-                        <span><i class="legend-wrong"></i> Wrong-Way</span>
-                    </div>
+{% block head_extra %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div class="page-header">
+        <div>
+            <h1 class="page-title">Live Traffic Dashboard</h1>
+            <p class="page-subtitle">Real-time vehicle tracking, heatmap, and ML intelligence</p>
+        </div>
+        <span id="status-pill" class="status-pill">Initializing...</span>
+    </div>
+
+    <div class="stats-row">
+        <div class="stat-box">
+            <div class="label">Road Segments</div>
+            <div class="value" id="roads-count">0</div>
+        </div>
+        <div class="stat-box">
+            <div class="label">Vehicles</div>
+            <div class="value" id="vehicles-count">0</div>
+        </div>
+        <div class="stat-box">
+            <div class="label">Wrong-Way</div>
+            <div class="value" id="wrong-way-count">0</div>
+        </div>
+        <div class="stat-box">
+            <div class="label">Simulation</div>
+            <div class="value" id="sim-state">—</div>
+        </div>
+    </div>
+
+    <div class="dashboard-grid">
+        <!-- Left sidebar -->
+        <div class="dashboard-sidebar">
+            <div class="card">
+                <div class="card-title">System Status</div>
+                <div class="metric-row">
+                    <span class="label">Place</span>
+                    <span class="value" id="place-name">{{ place_name }}</span>
                 </div>
-                <div class="map-wrap">
-                    <div id="map-empty-state" class="map-empty-state">
-                        <strong>No road network loaded yet.</strong>
-                        <p>Use "Load Street Area" to ingest a specific part of the city and start the live vehicle simulation.</p>
+                <div class="metric-row">
+                    <span class="label">Poll Rate</span>
+                    <span class="value">{{ poll_interval_ms }}ms</span>
+                </div>
+                <div class="metric-row">
+                    <span class="label">Last Sync</span>
+                    <span class="value" id="last-update">—</span>
+                </div>
+                <div class="metric-row">
+                    <span class="label">One-Way</span>
+                    <span class="value" id="oneway-count">0</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Map Legend</div>
+                <div class="legend" style="flex-direction: column;">
+                    <span class="legend-item"><span class="legend-dot" style="background:#5a6f88"></span> Roads</span>
+                    <span class="legend-item"><span class="legend-dot" style="background:#6f86a3"></span> Vehicles</span>
+                    <span class="legend-item"><span class="legend-dot" style="background:#d69e2e"></span> Suspicious</span>
+                    <span class="legend-item"><span class="legend-dot" style="background:#e53e3e"></span> Wrong-Way</span>
+                    <span class="legend-item"><span class="legend-dot" style="background:#38a169"></span> Selected</span>
+                    <span class="legend-item"><span class="legend-dot" style="background:#d69e2e"></span> Heatmap</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Wrong-Way Monitor</div>
+                <ul id="wrong-way-list" style="list-style:none; font-size:0.82rem; color: var(--muted);">
+                    <li>No active wrong-way vehicles.</li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Real-World Use Cases</div>
+                <ul style="list-style:none; font-size:0.82rem; color: var(--text-secondary); line-height:1.5;">
+                    <li>Fleet Safety</li>
+                    <li>Urban Traffic Monitoring</li>
+                    <li>Campus Mobility Monitoring</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Center map -->
+        <div class="dashboard-map">
+            <div class="map-stack">
+                <div class="map-stage">
+                    <div id="map-empty-state" class="map-empty-overlay">
+                        <div>
+                            <strong>No road network loaded.</strong>
+                            <p>Go to Control page to load a street area and start the simulation.</p>
+                        </div>
                     </div>
                     <div id="map"></div>
                 </div>
-            </article>
+                <div class="card selected-heatmap-card">
+                    <div class="card-title">Selected Vehicle Heatmap (Live)</div>
+                    <div id="selected-heatmap-empty" class="empty-state" style="padding: 12px; font-size: 0.8rem;">
+                        Select a vehicle to start live heatmap playback.
+                    </div>
+                    <canvas id="selected-heatmap-canvas" height="120"></canvas>
+                </div>
+            </div>
+        </div>
 
-            <aside class="side-stack">
-                <article class="panel">
-                    <div class="panel-heading">
-                        <div>
-                            <p class="panel-title">Runtime Feed</p>
-                            <p class="panel-subtitle">Latest API state</p>
+        <!-- Right panel -->
+        <div class="dashboard-panel">
+            <div class="card" id="vehicle-panel">
+                <div class="card-title">Vehicle Intelligence</div>
+                <p id="vehicle-panel-empty" style="color: var(--muted); font-size: 0.85rem;">
+                    Click a vehicle on the map to inspect.
+                </p>
+
+                <div id="vehicle-detail" style="display: none;">
+                    <div class="panel-section">
+                        <div class="metric-row">
+                            <span class="label">Vehicle ID</span>
+                            <span class="value" id="vp-id">—</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="label">Speed</span>
+                            <span class="value" id="vp-speed">—</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="label">State</span>
+                            <span class="value" id="vp-state">—</span>
                         </div>
                     </div>
-                    <dl class="meta-list">
-                        <div>
-                            <dt>Place</dt>
-                            <dd id="place-name">{{ place_name }}</dd>
-                        </div>
-                        <div>
-                            <dt>Poll Interval</dt>
-                            <dd id="poll-interval">{{ poll_interval_ms }} ms</dd>
-                        </div>
-                        <div>
-                            <dt>Last Update</dt>
-                            <dd id="last-update">Not synced yet</dd>
-                        </div>
-                        <div>
-                            <dt>One-Way Roads</dt>
-                            <dd id="oneway-count">0</dd>
-                        </div>
-                        <div>
-                            <dt>Simulation</dt>
-                            <dd id="simulation-state">stopped</dd>
-                        </div>
-                    </dl>
-                </article>
 
-                <article class="panel">
-                    <div class="panel-heading">
-                        <div>
-                            <p class="panel-title">Selected Vehicle Intelligence</p>
-                            <p class="panel-subtitle">Trajectory, heat, timing, and behavior</p>
+                    <div class="panel-section">
+                        <div class="panel-section-title">Direction</div>
+                        <div class="metric-row">
+                            <span class="label">WWP</span>
+                            <span class="value" id="vp-wwp">—</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="label">Direction Score</span>
+                            <span class="value" id="vp-direction">—</span>
                         </div>
                     </div>
-                    <p id="selected-vehicle-summary" class="insight-summary">
-                        Select a vehicle on the map to inspect live predictions.
-                    </p>
-                    <div class="insight-grid">
-                        <div>
-                            <p class="mini-title">Temporal Analysis</p>
-                            <ul id="temporal-analysis" class="event-list compact">
-                                <li>No vehicle selected.</li>
-                            </ul>
+
+                    <div class="panel-section">
+                        <div class="panel-section-title">Detection Logic</div>
+                        <div class="logic-pipeline" id="vp-logic-pipeline">
+                            Road Direction → Vehicle Heading → Angle Difference → Temporal Filter → Final Decision
                         </div>
-                        <div>
-                            <p class="mini-title">Behavioral Awareness</p>
-                            <ul id="behavior-awareness" class="event-list compact">
-                                <li>No behavioral profile yet.</li>
-                            </ul>
+                        <div class="metric-row">
+                            <span class="label">Road Bearing</span>
+                            <span class="value" id="vp-road-bearing">—</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="label">Vehicle Bearing</span>
+                            <span class="value" id="vp-vehicle-bearing">—</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="label">Angle Difference</span>
+                            <span class="value" id="vp-angle-diff">—</span>
+                        </div>
+                        <div class="angle-gauge-wrap">
+                            <div class="angle-gauge-track">
+                                <div class="angle-gauge-fill" id="vp-angle-gauge"></div>
+                            </div>
+                            <span id="vp-angle-gauge-label" class="value">—</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="label">Temporal Stability</span>
+                            <span class="value" id="vp-temporal">—</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="label">Decision</span>
+                            <span class="value" id="vp-decision">—</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="label">Confidence</span>
+                            <span class="value" id="vp-confidence">—</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="label">Status</span>
+                            <span class="value" id="vp-status">—</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="label">GPS Stability</span>
+                            <span class="value" id="vp-gps-stability">—</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="label">Edge Case</span>
+                            <span class="value" id="vp-edge-case">—</span>
                         </div>
                     </div>
-                </article>
 
-                <article class="panel">
-                    <div class="panel-heading">
-                        <div>
-                            <p class="panel-title">Collision Predictions</p>
-                            <p class="panel-subtitle">Time-to-conflict inside the live horizon</p>
+                    <div class="panel-section">
+                        <div class="panel-section-title">False Positive Status</div>
+                        <div class="metric-row">
+                            <span class="label">False Positive Risk</span>
+                            <span class="value" id="vp-fp-risk">—</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="label">Reason</span>
+                            <span class="value" id="vp-fp-reason">—</span>
                         </div>
                     </div>
-                    <ul id="collision-list" class="event-list compact">
-                        <li>No collision predictions yet.</li>
-                    </ul>
-                </article>
+                    <div class="panel-section">
+                        <div class="panel-section-title">Surrounding Context</div>
+                        <ul id="vp-surrounding-context" style="list-style:none; font-size:0.8rem; color:var(--text-secondary); line-height:1.45;">
+                            <li>No contextual risk signals yet.</li>
+                        </ul>
+                    </div>
 
-                <article class="panel">
-                    <div class="panel-heading">
-                        <div>
-                            <p class="panel-title">Route Heatmap Overlap</p>
-                            <p class="panel-subtitle">Risk zones on the predicted path</p>
+                    <div class="panel-section">
+                        <div class="panel-section-title">Risk</div>
+                        <div class="metric-row">
+                            <span class="label">TTC</span>
+                            <span class="value" id="vp-ttc">—</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="label">Risk Score</span>
+                            <span class="value" id="vp-risk">—</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="label">Maneuverability</span>
+                            <span class="value" id="vp-maneuver">—</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="label">Alert</span>
+                            <span class="value" id="vp-alert">—</span>
                         </div>
                     </div>
-                    <ul id="route-risk-list" class="event-list compact">
-                        <li>No heatmap route overlap yet.</li>
-                    </ul>
-                </article>
 
-                <article class="panel">
-                    <div class="panel-heading">
-                        <div>
-                            <p class="panel-title">Wrong-Way Monitor</p>
-                            <p class="panel-subtitle">Active suspect vehicles</p>
+                    <div class="panel-section">
+                        <div class="panel-section-title">Spatial</div>
+                        <div class="metric-row">
+                            <span class="label">Nearby Vehicles</span>
+                            <span class="value" id="vp-nearby">—</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="label">Closest Distance</span>
+                            <span class="value" id="vp-closest">—</span>
                         </div>
                     </div>
-                    <ul id="wrong-way-list" class="event-list">
-                        <li>No active wrong-way vehicles.</li>
-                    </ul>
-                </article>
 
-                <article class="panel">
-                    <div class="panel-heading">
-                        <div>
-                            <p class="panel-title">Backend Endpoints</p>
-                            <p class="panel-subtitle">Quick integration surface</p>
+                    <div class="panel-section">
+                        <div class="panel-section-title">Semantic</div>
+                        <div class="metric-row">
+                            <span class="label">Road Type</span>
+                            <span class="value" id="vp-road-class">—</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="label">POI Density</span>
+                            <span class="value" id="vp-poi-density">—</span>
                         </div>
                     </div>
-                    <ul class="event-list compact">
-                        <li><code>GET /api/roads</code></li>
-                        <li><code>GET /api/vehicles</code></li>
-                        <li><code>GET /api/vehicles/history</code></li>
-                        <li><code>GET /api/live-analysis</code></li>
-                        <li><code>GET /api/analytics/model-metrics</code></li>
-                        <li><code>GET /api/pois</code></li>
-                        <li><code>GET /api/summary</code></li>
-                    </ul>
-                </article>
-            </aside>
-        </section>
-    </main>
+                    <div class="panel-section">
+                        <div class="panel-section-title">ML</div>
+                        <div class="metric-row">
+                            <span class="label">Anomaly Score</span>
+                            <span class="value" id="vp-anomaly">—</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="label">Memory Match</span>
+                            <span class="value" id="vp-memory">—</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
-    <script
-        src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-        crossorigin=""
-    ></script>
-    <script src="../static/js/app.js"></script>
-</body>
-</html>
+            <div class="card">
+                <div class="card-title">Collision Predictions</div>
+                <ul id="collision-list" style="list-style:none; font-size:0.82rem; color: var(--muted);">
+                    <li>No predictions yet.</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="/static/js/app.js"></script>
+{% endblock %}

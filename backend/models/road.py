@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 
@@ -39,12 +39,15 @@ class RoadSegment(db.Model):
     pois = db.relationship("POI", back_populates="nearest_road_segment", lazy="dynamic")
 
     def to_dict(self) -> dict:
+        reverse_bearing = (self.bearing + 180.0) % 360.0
+        allowed_directions = [round(self.bearing, 1)] if self.oneway else [round(self.bearing, 1), round(reverse_bearing, 1)]
         return {
             "id": self.id,
             "start": [self.start_lat, self.start_lon],
             "end": [self.end_lat, self.end_lon],
             "bearing": self.bearing,
             "oneway": self.oneway,
+            "allowed_directions": allowed_directions,
             "length": self.length_m,
             "road_class": self.road_class,
             "speed_limit_mps": self.speed_limit_mps,

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from pathlib import Path
 
@@ -41,6 +43,7 @@ class Config:
     ENABLE_SIMULATION = _as_bool(os.getenv("ENABLE_SIMULATION"), True)
 
     VEHICLE_COUNT = int(os.getenv("VEHICLE_COUNT", "30"))
+    MAX_VEHICLES = int(os.getenv("MAX_VEHICLES", "40"))
     WRONG_WAY_COUNT = int(os.getenv("WRONG_WAY_COUNT", "2"))
     WRONG_WAY_DURATION_SECONDS = float(
         os.getenv("WRONG_WAY_DURATION_SECONDS", "30")
@@ -50,7 +53,8 @@ class Config:
     )
     GPS_NOISE_METERS = float(os.getenv("GPS_NOISE_METERS", "6.0"))
     SIMULATION_RANDOM_SEED = int(os.getenv("SIMULATION_RANDOM_SEED", "42"))
-    FRONTEND_POLL_INTERVAL_MS = int(os.getenv("FRONTEND_POLL_INTERVAL_MS", "1000"))
+    FRONTEND_POLL_INTERVAL_MS = int(os.getenv("FRONTEND_POLL_INTERVAL_MS", "500"))
+    ANALYTICS_HISTORY_LENGTH = int(os.getenv("ANALYTICS_HISTORY_LENGTH", "120"))
     MAP_MATCH_CANDIDATE_LIMIT = int(os.getenv("MAP_MATCH_CANDIDATE_LIMIT", "5"))
     MAP_MATCH_DISTANCE_THRESHOLD_M = float(
         os.getenv("MAP_MATCH_DISTANCE_THRESHOLD_M", "30.0")

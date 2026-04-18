@@ -58,6 +58,7 @@ DANGER_THRESHOLD = 0.15
 COLLISION_CIRCLE_PROB = 0.45
 MAX_TRAIL_LEN = 20
 MAX_SAVE_FRAMES = 60            # frames to capture in save mode
+SAVE_LIVE_EVERY_N = 3           # interactive mode periodic snapshot export
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "heatmap_output")
 
@@ -568,6 +569,7 @@ def run_interactive_mode():
     fig.subplots_adjust(left=0.03, right=0.97, top=0.85, bottom=0.04, wspace=0.08)
 
     frame_counter = [0]
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     def _update(_frame_unused):
         data = build_frame(frame_counter[0])
@@ -578,6 +580,13 @@ def run_interactive_mode():
               f"max_risk={m['max_risk']}  "
               f"collisions={m['active_collisions']}")
         render_dual_frame(fig, axes, data)
+        if frame_counter[0] % SAVE_LIVE_EVERY_N == 0:
+            latest_path = os.path.join(OUTPUT_DIR, "latest_frame.png")
+            history_path = os.path.join(OUTPUT_DIR, f"frame_{frame_counter[0]:03d}.png")
+            fig.savefig(latest_path, dpi=120, facecolor="#0a0a0a",
+                        bbox_inches="tight", pad_inches=0.08)
+            fig.savefig(history_path, dpi=120, facecolor="#0a0a0a",
+                        bbox_inches="tight", pad_inches=0.08)
         frame_counter[0] += 1
 
     anim = animation.FuncAnimation(
