@@ -12,4 +12,5 @@ def index():
         "index.html",
         place_name=current_app.config["FLOWGUARD_PLACE"],
         poll_interval_ms=current_app.config["FRONTEND_POLL_INTERVAL_MS"],
+        nearby_radius_m=current_app.config["FRONTEND_NEARBY_RADIUS_M"],
     )

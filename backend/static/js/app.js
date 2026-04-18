@@ -14,15 +14,16 @@ const state = {
     selectedVehicleId: null,
     selectedRoadId: null,
     currentPlace: body.dataset.place || "FlowGuard Demo",
-    pollIntervalMs: 500,
+    pollIntervalMs: Number.parseInt(body.dataset.pollIntervalMs || "500", 10),
     pollHandle: null,
     logs: [],
     vehicleHistory: new Map(),
     riskTimeline: [],
     lastAlertState: new Map(),
     isRefreshing: false,
-    vehicleCount: 50,
+    vehicleCount: 30,
     speedVariation: false,
+    nearbyRadiusM: Number.parseFloat(body.dataset.nearbyRadiusM || "120"),
 }
 
 const dom = {}
@@ -194,12 +195,12 @@ function lineWeightForRoad(road) {
 
 function resolveScenarioPreset(preset) {
     if (preset === "sparse-highway") {
-        return { query: "Anna Salai, Chennai, Tamil Nadu, India", radius: "1000" }
+        return { query: `${state.currentPlace}`, radius: "1000" }
     }
     if (preset === "dense-urban") {
-        return { query: "George Town, Chennai, Tamil Nadu, India", radius: "700" }
+        return { query: `${state.currentPlace}`, radius: "700" }
     }
-    return { query: "T. Nagar, Chennai, Tamil Nadu, India", radius: "700" }
+    return { query: `${state.currentPlace}`, radius: "700" }
 }
 
 function roadIntelligenceScore(road) {
@@ -456,7 +457,7 @@ function renderVehicles() {
     if (selected) {
         for (const vehicle of state.vehicles) {
             if (vehicle.id === selected.id) continue
-            if (distanceMeters(selected, vehicle) <= 120) nearbyIds.add(vehicle.id)
+            if (distanceMeters(selected, vehicle) <= state.nearbyRadiusM) nearbyIds.add(vehicle.id)
         }
     }
 
@@ -578,6 +579,15 @@ function renderMetrics() {
     dom.highRiskCount.textContent = String(highRisk)
     dom.avgTtc.textContent = avgTtcValue == null ? "--" : `${formatNumber(avgTtcValue, 2)} s`
     dom.analyticsCount.textContent = String(state.vehicles.length)
+    if (dom.vehicleCount && String(dom.vehicleCount.value) !== String(state.vehicleCount)) {
+        dom.vehicleCount.value = String(state.vehicleCount)
+    }
+    if (dom.vehicleCountValue) {
+        dom.vehicleCountValue.textContent = String(state.vehicleCount)
+    }
+    if (dom.speedVariationToggle) {
+        dom.speedVariationToggle.checked = state.speedVariation
+    }
     if (dom.vehicleControlSelect) {
         dom.vehicleControlSelect.innerHTML = `<option value="">Select vehicle ID</option>${state.vehicles
             .map((vehicle) => `<option value="${vehicle.id}" ${vehicle.id === state.selectedVehicleId ? "selected" : ""}>Vehicle ${vehicle.id}</option>`)
@@ -677,7 +687,7 @@ function renderVehicleIntelligencePanel() {
     }
 
     const nearby = state.vehicles
-        .filter((item) => item.id !== vehicle.id && distanceMeters(vehicle, item) <= 120)
+        .filter((item) => item.id !== vehicle.id && distanceMeters(vehicle, item) <= state.nearbyRadiusM)
         .sort((a, b) => distanceMeters(vehicle, a) - distanceMeters(vehicle, b))
     const closestDistance = nearby.length ? distanceMeters(vehicle, nearby[0]) : null
     const relativeVelocity = nearby.length
@@ -1166,6 +1176,29 @@ async function triggerWrongWayScenario() {
     }
 }
 
+async function updateSimulationConfig() {
+    try {
+        const result = await requestJSON("/api/admin/simulation/config", {
+            method: "POST",
+            body: JSON.stringify({
+                vehicle_count: state.vehicleCount,
+                speed_variation_enabled: state.speedVariation,
+            }),
+        })
+        if (result.vehicle_count != null) {
+            state.vehicleCount = Number(result.vehicle_count)
+            if (dom.vehicleCount) dom.vehicleCount.value = String(state.vehicleCount)
+            if (dom.vehicleCountValue) dom.vehicleCountValue.textContent = String(state.vehicleCount)
+        }
+        if (result.speed_variation_enabled != null) {
+            state.speedVariation = Boolean(result.speed_variation_enabled)
+            if (dom.speedVariationToggle) dom.speedVariationToggle.checked = state.speedVariation
+        }
+    } catch (error) {
+        addLog("warning", `Simulation config update failed: ${error.message}`)
+    }
+}
+
 async function refreshSnapshot() {
     if (state.isRefreshing) return
     state.isRefreshing = true
@@ -1188,6 +1221,9 @@ async function refreshSnapshot() {
         state.summary = await summaryPromise
         state.vehicles = Array.isArray(livePayload.direction) ? livePayload.direction : []
         state.matches = Array.isArray(livePayload.matches) ? livePayload.matches : []
+        state.vehicleCount = Number(state.summary?.vehicle_count_target ?? state.vehicleCount)
+        state.speedVariation = Boolean(state.summary?.speed_variation_enabled ?? state.speedVariation)
+        state.nearbyRadiusM = Number(state.summary?.nearby_radius_m ?? state.nearbyRadiusM)
 
         recordVehicleHistory()
         recordRiskTimeline()
@@ -1244,14 +1280,14 @@ function bindControls() {
             addLog("warning", "Scenario switched to collision scenario mode.")
             return
         }
-        dom.scenarioQuery.value = "Chennai, Tamil Nadu, India"
+        dom.scenarioQuery.value = state.currentPlace
         addLog("info", "Scenario mode switched to normal.")
     })
 
     if (dom.locationSelector) {
         dom.locationSelector.addEventListener("change", () => {
             dom.scenarioQuery.value = dom.locationSelector.value === "chennai"
-                ? "Chennai, Tamil Nadu, India"
+                ? state.currentPlace
                 : "13.0827,80.2707"
         })
     }
@@ -1260,10 +1296,12 @@ function bindControls() {
             state.vehicleCount = Number(dom.vehicleCount.value)
             dom.vehicleCountValue.textContent = dom.vehicleCount.value
         })
+        dom.vehicleCount.addEventListener("change", updateSimulationConfig)
     }
     if (dom.speedVariationToggle) {
         dom.speedVariationToggle.addEventListener("change", () => {
             state.speedVariation = dom.speedVariationToggle.checked
+            updateSimulationConfig()
         })
     }
     if (dom.vehicleWrongWayToggle) {

@@ -10,7 +10,10 @@ _SUSPECT_INCREMENT = 0.25
 _NORMAL_DECAY = 0.15
 
 
-def update_memory(vehicles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def update_memory(
+    vehicles: list[dict[str, Any]],
+    settings: dict[str, float | int] | None = None,
+) -> list[dict[str, Any]]:
     """Update persistent per-vehicle behavioral memory in O(n).
 
     Expected vehicle fields:
@@ -20,6 +23,11 @@ def update_memory(vehicles: list[dict[str, Any]]) -> list[dict[str, Any]]:
     - ``wrong_way_flag`` (optional)
     - ``timestamp`` (optional)
     """
+    cfg = settings or {}
+    max_history = int(cfg.get("max_history", _MAX_HISTORY))
+    suspect_increment = float(cfg.get("suspect_increment", _SUSPECT_INCREMENT))
+    normal_decay = float(cfg.get("normal_decay", _NORMAL_DECAY))
+
     for vehicle in vehicles:
         vehicle_id = int(vehicle.get("vehicle_id", vehicle.get("id")))
         timestamp = float(vehicle.get("timestamp", 0.0) or 0.0)
@@ -50,9 +58,9 @@ def update_memory(vehicles: list[dict[str, Any]]) -> list[dict[str, Any]]:
         base_score = memory["violation_count"] * 0.5 + sustained_duration_s * 0.3
 
         if temporal_state == "SUSPECT":
-            risk_score = max(memory["risk_score"] + _SUSPECT_INCREMENT, base_score)
+            risk_score = max(memory["risk_score"] + suspect_increment, base_score)
         elif temporal_state == "NORMAL":
-            risk_score = max(0.0, memory["risk_score"] - _NORMAL_DECAY)
+            risk_score = max(0.0, memory["risk_score"] - normal_decay)
         else:
             risk_score = base_score
 
@@ -68,8 +76,8 @@ def update_memory(vehicles: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "violation_count": memory["violation_count"],
             }
         )
-        if len(memory["history"]) > _MAX_HISTORY:
-            del memory["history"][:-_MAX_HISTORY]
+        if len(memory["history"]) > max_history:
+            del memory["history"][:-max_history]
 
         vehicle["wrong_way_flag"] = wrong_way_flag
         vehicle["risk_score"] = risk_score

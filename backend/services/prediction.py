@@ -56,7 +56,14 @@ def predict_trajectory(
     vehicle: dict[str, Any],
     steps: int = DEFAULT_PREDICTION_STEPS,
     step_dt_s: float = DEFAULT_STEP_DT_S,
+    settings: dict[str, float | int] | None = None,
 ) -> dict[str, Any]:
+    cfg = settings or {}
+    steps = int(cfg.get("steps", steps))
+    step_dt_s = float(cfg.get("step_dt_s", step_dt_s))
+    velocity_gain = float(cfg.get("velocity_gain", VELOCITY_GAIN))
+    position_gain = float(cfg.get("position_gain", POSITION_GAIN))
+
     """Predict a short future trajectory using a lightweight Kalman-style update.
 
     Internal state vector: [x, y, vx, vy]
@@ -93,8 +100,8 @@ def predict_trajectory(
         pred_x = float(previous["x"]) + float(previous["vx"]) * dt
         pred_y = float(previous["y"]) + float(previous["vy"]) * dt
 
-        fused_x_prev = pred_x + POSITION_GAIN * (meas_x_prev - pred_x)
-        fused_y_prev = pred_y + POSITION_GAIN * (meas_y_prev - pred_y)
+        fused_x_prev = pred_x + position_gain * (meas_x_prev - pred_x)
+        fused_y_prev = pred_y + position_gain * (meas_y_prev - pred_y)
 
         if dt > 1e-6:
             observed_vx = fused_x_prev / dt
@@ -102,8 +109,8 @@ def predict_trajectory(
             measured_vx = (measured_vx + observed_vx) / 2.0
             measured_vy = (measured_vy + observed_vy) / 2.0
 
-        vx = float(previous["vx"]) + VELOCITY_GAIN * (measured_vx - float(previous["vx"]))
-        vy = float(previous["vy"]) + VELOCITY_GAIN * (measured_vy - float(previous["vy"]))
+        vx = float(previous["vx"]) + velocity_gain * (measured_vx - float(previous["vx"]))
+        vy = float(previous["vy"]) + velocity_gain * (measured_vy - float(previous["vy"]))
 
     future_positions: list[list[float]] = []
     pred_x = x

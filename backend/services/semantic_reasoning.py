@@ -1,118 +1,75 @@
+from __future__ import annotations
+
 import math
-from typing import List
+from typing import Any
 
-# Default speed threshold (m/s). ~28 km/h
-SPEED_THRESHOLD = 8.0 
 
-def semantic_reasoning(vehicles: List[dict], dt: float) -> List[dict]:
-    """
-    Classifies vehicle behavior into logical states: 'normal', 'u_turn', 'wrong_way', 'risky'.
-    Updates each vehicle dictionary in-place.
-    """
+def semantic_reasoning(
+    vehicles: list[dict[str, Any]],
+    dt: float,
+    settings: dict[str, float] | None = None,
+) -> list[dict[str, Any]]:
+    cfg = settings or {}
+    wrong_way_angle_deg = float(cfg.get("wrong_way_angle_deg", 150.0))
+    u_turn_max_seconds = float(cfg.get("u_turn_max_seconds", 2.0))
+    wrong_way_min_seconds = float(cfg.get("wrong_way_min_seconds", 3.0))
+    risky_speed_threshold_mps = float(cfg.get("risky_speed_threshold_mps", 8.0))
+
     for vehicle in vehicles:
-        # Check for required fields for safety
-        if "wrong_way_flag" not in vehicle or "angle_dev" not in vehicle:
-            # Fallback for silent failure prevention
-            pass
-            
-        # 1. Maintain temporal state
-        if "deviation_time" not in vehicle:
-            vehicle["deviation_time"] = 0.0
+        temporal_state = str(vehicle.get("temporal_state", "NORMAL") or "NORMAL").upper()
+        sustained_duration_s = float(vehicle.get("sustained_duration_s", 0.0) or 0.0)
+        speed_mps = float(vehicle.get("speed", vehicle.get("speed_mps", 0.0)) or 0.0)
+        direction_similarity = float(vehicle.get("direction_similarity", 1.0) or 1.0)
+        direction_similarity = max(-1.0, min(1.0, direction_similarity))
+        angle_dev_deg = math.degrees(math.acos(direction_similarity))
 
-        # Smooth deviation
-        if vehicle.get("wrong_way_flag", False):
-            vehicle["deviation_time"] += dt
-        else:
-            vehicle["deviation_time"] = max(0.0, vehicle["deviation_time"] - dt)
-
-        dev_time = vehicle["deviation_time"]
-        
-        # 2. Compute speed
-        vx = vehicle.get("vx", 0.0)
-        vy = vehicle.get("vy", 0.0)
-        speed = math.sqrt(vx**2 + vy**2)
-        
-        # Normalize angle (Handle Radians to Degrees)
-        # Note: We check if it is within a small limit like 2*pi, but for safety math.pi is fine
-        angle_dev = vehicle.get("angle_dev", 0.0)
-        if angle_dev <= math.pi and angle_dev > 0:
-            angle_dev = math.degrees(angle_dev)
-            
-        # 9. Edge Cases (Zero velocity)
-        if speed == 0.0:
-            vehicle["class"] = "normal"
-            vehicle["confidence"] = 1.0
-            vehicle["reason"] = "Vehicle is stationary"
-            vehicle["is_high_risk"] = False
-            vehicle["severity"] = "low"
-            # Optional debug:
-            # print(f"[Semantic] ID:{vehicle.get('id', 'Unknown')} → normal (Vehicle is stationary)")
-            continue
-        
-        # 3. Classification Rules (CORE LOGIC)
-        classification = "normal"
-        reason = "Normal driving behavior"
-        
-        if angle_dev > 150 and dev_time > 3:
+        wrong_way_flag = bool(vehicle.get("is_violation", False) or temporal_state == "CONFIRMED")
+        if temporal_state == "CONFIRMED" or (
+            angle_dev_deg >= wrong_way_angle_deg and sustained_duration_s >= wrong_way_min_seconds
+        ):
             classification = "wrong_way"
-            reason = f"Sustained opposite direction > 3s (dev: {dev_time:.1f}s)"
-        elif angle_dev > 150 and dev_time <= 2:
+            reason = "Sustained opposite-direction movement."
+        elif angle_dev_deg >= wrong_way_angle_deg and sustained_duration_s <= u_turn_max_seconds:
             classification = "u_turn"
-            reason = "High angle deviation but short duration; possible U-turn"
-        elif speed > SPEED_THRESHOLD and angle_dev > 30:
+            reason = "High direction deviation with short duration."
+        elif speed_mps >= risky_speed_threshold_mps and angle_dev_deg >= 30.0:
             classification = "risky"
-            reason = "High speed combined with significant angular deviation"
-        elif angle_dev > 150 and 2 < dev_time <= 3:
-            # Handling the 2s ~ 3s gap
+            reason = "Elevated speed with directional instability."
+        elif temporal_state == "SUSPECT":
             classification = "risky"
-            reason = "Transitioning to wrong way behavior"
-
-        # Low-speed wrong-way filter
-        if classification == "wrong_way" and speed < 2:
-            classification = "risky"
-            reason = "Low-speed reverse movement (not critical)"
-
-        # 5. Confidence Calculation
-        if classification == "wrong_way":
-            confidence = min(1.0, (dev_time / 5.0) * (max(0.1, speed) / SPEED_THRESHOLD))
-        elif classification == "u_turn":
-            # high confidence initially, slowly drops off toward risky/wrong_way
-            confidence = max(0.1, min(1.0, 1.0 - (dev_time / 3.0)))
-        elif classification == "risky":
-            confidence = 0.8
+            reason = "Temporal layer flagged suspect movement."
         else:
-            # Normal
-            confidence = 1.0
-            
-        # 7. Add Severity
+            classification = "normal"
+            reason = "Nominal movement pattern."
+
+        confidence = float(vehicle.get("confidence", 0.0) or 0.0)
+        confidence = max(0.0, min(1.0, confidence))
         if classification == "wrong_way":
             severity = "high"
-        elif classification == "risky":
+        elif classification in {"risky", "u_turn"}:
             severity = "medium"
         else:
             severity = "low"
-            
-        # Write formatted output (Updates in-place)
+
+        vehicle["angle_dev"] = round(angle_dev_deg, 3)
+        vehicle["wrong_way_flag"] = wrong_way_flag
         vehicle["class"] = classification
-        vehicle["confidence"] = round(max(0.0, min(1.0, confidence)), 2) # Ensure within [0,1]
+        vehicle["semantic_class"] = classification if classification != "u_turn" else "risky"
         vehicle["reason"] = reason
         vehicle["severity"] = severity
-        
-        # 🔥 Bonus: High Risk identifier
-        vehicle["is_high_risk"] = True if classification == "wrong_way" else False
-
-        # 8. Debug print
-        print(f"[Semantic] ID:{vehicle.get('id', 'Unknown')} -> {classification} ({reason})")
+        vehicle["confidence"] = round(confidence, 4)
+        vehicle["is_high_risk"] = classification == "wrong_way"
+        vehicle["deviation_time"] = max(0.0, sustained_duration_s if wrong_way_flag else max(sustained_duration_s - dt, 0.0))
 
     return vehicles
 
-def run_semantic(vehicles: List[dict], dt: float) -> List[dict]:
-    """
-    Integration-safe wrapper for semantic reasoning.
-    Usage: vehicles = run_semantic(vehicles, dt=0.5)
-    """
+
+def run_semantic(
+    vehicles: list[dict[str, Any]],
+    dt: float,
+    settings: dict[str, float] | None = None,
+) -> list[dict[str, Any]]:
     try:
-        return semantic_reasoning(vehicles, dt)
-    except Exception as e:
-        print("[Semantic ERROR]", e)
+        return semantic_reasoning(vehicles, dt, settings=settings)
+    except Exception:
         return vehicles

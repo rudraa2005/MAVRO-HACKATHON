@@ -26,10 +26,10 @@ def _velocity_components(speed_mps: float, bearing_deg: float) -> tuple[float, f
     return vx, vy
 
 
-def _risk_from_ttc(ttc: float) -> str:
-    if ttc < 2.0:
+def _risk_from_ttc(ttc: float, danger_ttc_s: float, risky_ttc_s: float) -> str:
+    if ttc < danger_ttc_s:
         return "danger"
-    if ttc < 5.0:
+    if ttc < risky_ttc_s:
         return "risky"
     return "safe"
 
@@ -39,7 +39,17 @@ def _vehicle_id(vehicle: dict[str, Any]) -> int | None:
     return int(value) if value is not None else None
 
 
-def compute_spatial(vehicles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def compute_spatial(
+    vehicles: list[dict[str, Any]],
+    settings: dict[str, float] | None = None,
+) -> list[dict[str, Any]]:
+    cfg = settings or {}
+    max_interaction_distance_m = float(
+        cfg.get("max_interaction_distance_m", MAX_INTERACTION_DISTANCE_M)
+    )
+    danger_ttc_s = float(cfg.get("ttc_danger_s", 2.0))
+    risky_ttc_s = float(cfg.get("ttc_risky_s", 5.0))
+
     """Compute pairwise TTC and collision risk from live positions and velocities.
 
     Expected per vehicle:
@@ -86,7 +96,7 @@ def compute_spatial(vehicles: list[dict[str, Any]]) -> list[dict[str, Any]]:
             dx = vehicle_b["x"] - vehicle_a["x"]
             dy = vehicle_b["y"] - vehicle_a["y"]
             distance = math.hypot(dx, dy)
-            if distance > MAX_INTERACTION_DISTANCE_M:
+            if distance > max_interaction_distance_m:
                 continue
 
             dvx = vehicle_b["vx"] - vehicle_a["vx"]
@@ -100,7 +110,7 @@ def compute_spatial(vehicles: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 continue
 
             ttc = -dot / rel_speed_sq
-            risk = _risk_from_ttc(ttc)
+            risk = _risk_from_ttc(ttc, danger_ttc_s=danger_ttc_s, risky_ttc_s=risky_ttc_s)
             rounded_ttc = round(ttc, 2)
 
             a = vehicle_a["vehicle"]

@@ -78,6 +78,9 @@ def summary():
         "simulation_running": simulation_engine.is_running(),
         "simulation_interval_seconds": current_app.config["SIMULATION_INTERVAL_SECONDS"],
         "poll_interval_ms": current_app.config["FRONTEND_POLL_INTERVAL_MS"],
+        "vehicle_count_target": current_app.config["VEHICLE_COUNT"],
+        "speed_variation_enabled": current_app.config["SPEED_VARIATION_ENABLED"],
+        "nearby_radius_m": current_app.config["FRONTEND_NEARBY_RADIUS_M"],
         "map_matching_ready": RoadSegment.query.count() > 0,
     }
 
@@ -220,6 +223,26 @@ def admin_stop_simulation():
             "simulation_running": simulation_engine.is_running(),
             "vehicles": Vehicle.query.count(),
             "roads": RoadSegment.query.count(),
+        }
+    ), 202
+
+
+@api_bp.post("/admin/simulation/config")
+def admin_simulation_config():
+    payload = request.get_json(silent=True) or {}
+    vehicle_count = payload.get("vehicle_count")
+    speed_variation_enabled = payload.get("speed_variation_enabled")
+    updated = simulation_engine.update_runtime_config(
+        current_app._get_current_object(),
+        vehicle_count=int(vehicle_count) if vehicle_count is not None else None,
+        speed_variation_enabled=(
+            bool(speed_variation_enabled) if speed_variation_enabled is not None else None
+        ),
+    )
+    return jsonify(
+        {
+            "simulation_running": simulation_engine.is_running(),
+            **updated,
         }
     ), 202
 

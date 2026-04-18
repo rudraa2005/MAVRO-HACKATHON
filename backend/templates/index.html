@@ -15,7 +15,11 @@
     >
     <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
 </head>
-<body data-place="{{ place_name }}" data-poll-interval-ms="{{ poll_interval_ms }}">
+<body
+    data-place="{{ place_name }}"
+    data-poll-interval-ms="{{ poll_interval_ms }}"
+    data-nearby-radius-m="{{ nearby_radius_m }}"
+>
     <div class="app-shell">
         <aside class="sidebar">
             <div class="brand-block">

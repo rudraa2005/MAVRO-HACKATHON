@@ -138,6 +138,24 @@ class VehicleSimulationEngine:
             Vehicle.query.delete()
             db.session.commit()
 
+    def update_runtime_config(
+        self,
+        app: Flask,
+        *,
+        vehicle_count: int | None = None,
+        speed_variation_enabled: bool | None = None,
+    ) -> dict[str, int | bool]:
+        if vehicle_count is not None:
+            app.config["VEHICLE_COUNT"] = max(1, min(int(vehicle_count), 500))
+        if speed_variation_enabled is not None:
+            app.config["SPEED_VARIATION_ENABLED"] = bool(speed_variation_enabled)
+        with app.app_context():
+            self._ensure_vehicle_pool(time.time())
+        return {
+            "vehicle_count": int(app.config["VEHICLE_COUNT"]),
+            "speed_variation_enabled": bool(app.config["SPEED_VARIATION_ENABLED"]),
+        }
+
     def _run_loop(self) -> None:
         if self._app is None:
             return
@@ -488,7 +506,12 @@ class VehicleSimulationEngine:
     def _compute_speed(self, segment: SegmentRuntime, behavior: str) -> float:
         behavior_factor = BEHAVIOR_SPEED_FACTORS.get(behavior, 0.88)
         base_speed = max(segment.speed_limit_mps * behavior_factor, 5.0)
-        varied = base_speed * self._rng.uniform(0.92, 1.08)
+        if self._app is not None and self._app.config.get("SPEED_VARIATION_ENABLED", True):
+            min_factor = float(self._app.config.get("SPEED_VARIATION_MIN_FACTOR", 0.92))
+            max_factor = float(self._app.config.get("SPEED_VARIATION_MAX_FACTOR", 1.08))
+            varied = base_speed * self._rng.uniform(min_factor, max_factor)
+        else:
+            varied = base_speed
         return round(min(varied, 20.0), 2)
 
 

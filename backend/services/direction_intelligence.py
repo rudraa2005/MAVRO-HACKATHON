@@ -19,6 +19,8 @@ import threading
 import time
 from typing import Any
 
+from flask import current_app
+
 from backend.extensions import db
 from backend.models import RoadSegment, Vehicle, VehicleHistory
 from backend.services.anomaly_memory import reset_vehicle_memory, update_memory
@@ -27,6 +29,7 @@ from backend.services.decision import run_decision
 from backend.services.map_matching import map_matching_service
 from backend.services.prediction import predict_trajectory, reset_prediction_memory
 from backend.services.risk_engine import run_risk_engine
+from backend.services.semantic_reasoning import run_semantic
 from direction_intelligence_core import DirectionIntelligenceEngine, DirectionProbe
 
 
@@ -38,6 +41,7 @@ class DirectionIntelligenceService:
         self._seeded_vehicles: set[int] = set()
         self._last_signature: tuple[Any, ...] | None = None
         self._last_result: dict[str, Any] | None = None
+        self._engine_config_signature: tuple[Any, ...] | None = None
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -70,6 +74,8 @@ class DirectionIntelligenceService:
         cached = self._cached_result(signature)
         if cached is not None:
             return cached
+
+        self._ensure_engine_config()
 
         payloads = [vehicle.to_dict() for vehicle in vehicle_rows]
 
@@ -146,10 +152,14 @@ class DirectionIntelligenceService:
             )
             direction_results.append(result_dict)
 
-        direction_results = update_memory(direction_results)
-        direction_results = compute_spatial(direction_results)
-        direction_results = [predict_trajectory(vehicle) for vehicle in direction_results]
-        direction_results = run_risk_engine(direction_results)
+        direction_results = update_memory(direction_results, settings=self._memory_settings())
+        direction_results = compute_spatial(direction_results, settings=self._spatial_settings())
+        direction_results = run_semantic(direction_results, dt=self._simulation_dt(), settings=self._semantic_settings())
+        direction_results = [
+            predict_trajectory(vehicle, settings=self._prediction_settings())
+            for vehicle in direction_results
+        ]
+        direction_results = run_risk_engine(direction_results, settings=self._risk_settings())
         direction_results = run_decision(direction_results)
 
         di_elapsed_ms = (time.perf_counter() - di_started) * 1000.0
@@ -250,6 +260,90 @@ class DirectionIntelligenceService:
         with self._lock:
             self._last_signature = signature
             self._last_result = deepcopy(result)
+
+    def _ensure_engine_config(self) -> None:
+        cfg = current_app.config
+        signature = (
+            cfg["DIRECTION_TRAJECTORY_POINTS"],
+            cfg["DIRECTION_TRAJECTORY_MAX_AGE_S"],
+            cfg["DIRECTION_WWP_WINDOW_S"],
+            cfg["DIRECTION_SUSPECT_THRESHOLD"],
+            cfg["DIRECTION_VIOLATION_THRESHOLD"],
+            cfg["DIRECTION_SUSTAINED_SECONDS"],
+            cfg["DIRECTION_MIN_SPEED_MPS"],
+            cfg["DIRECTION_ONEWAY_ALPHA"],
+            cfg["DIRECTION_TWOWAY_ALPHA"],
+            cfg["DIRECTION_TEMPORAL_BETA"],
+            cfg["DIRECTION_STABLE_VARIANCE_THRESHOLD"],
+        )
+        if signature == self._engine_config_signature:
+            return
+        self._engine = DirectionIntelligenceEngine(
+            trajectory_points=cfg["DIRECTION_TRAJECTORY_POINTS"],
+            trajectory_max_age_s=cfg["DIRECTION_TRAJECTORY_MAX_AGE_S"],
+            wwp_window_s=cfg["DIRECTION_WWP_WINDOW_S"],
+            suspect_threshold=cfg["DIRECTION_SUSPECT_THRESHOLD"],
+            violation_threshold=cfg["DIRECTION_VIOLATION_THRESHOLD"],
+            sustained_seconds=cfg["DIRECTION_SUSTAINED_SECONDS"],
+            min_speed_mps=cfg["DIRECTION_MIN_SPEED_MPS"],
+            oneway_alpha=cfg["DIRECTION_ONEWAY_ALPHA"],
+            twoway_alpha=cfg["DIRECTION_TWOWAY_ALPHA"],
+            temporal_beta=cfg["DIRECTION_TEMPORAL_BETA"],
+            stable_variance_threshold=cfg["DIRECTION_STABLE_VARIANCE_THRESHOLD"],
+        )
+        self._seeded_vehicles.clear()
+        self._engine_config_signature = signature
+
+    @staticmethod
+    def _simulation_dt() -> float:
+        return float(current_app.config["SIMULATION_INTERVAL_SECONDS"])
+
+    @staticmethod
+    def _spatial_settings() -> dict[str, float]:
+        cfg = current_app.config
+        return {
+            "max_interaction_distance_m": float(cfg["SPATIAL_MAX_INTERACTION_DISTANCE_M"]),
+            "ttc_danger_s": float(cfg["SPATIAL_TTC_DANGER_S"]),
+            "ttc_risky_s": float(cfg["SPATIAL_TTC_RISKY_S"]),
+        }
+
+    @staticmethod
+    def _semantic_settings() -> dict[str, float]:
+        cfg = current_app.config
+        return {
+            "wrong_way_angle_deg": float(cfg["SEMANTIC_WRONG_WAY_ANGLE_DEG"]),
+            "u_turn_max_seconds": float(cfg["SEMANTIC_UTURN_MAX_SECONDS"]),
+            "wrong_way_min_seconds": float(cfg["SEMANTIC_WRONG_WAY_MIN_SECONDS"]),
+            "risky_speed_threshold_mps": float(cfg["SEMANTIC_RISKY_SPEED_THRESHOLD_MPS"]),
+        }
+
+    @staticmethod
+    def _prediction_settings() -> dict[str, float | int]:
+        cfg = current_app.config
+        return {
+            "steps": int(cfg["PREDICTION_STEPS"]),
+            "step_dt_s": float(cfg["PREDICTION_STEP_DT_S"]),
+            "velocity_gain": float(cfg["PREDICTION_VELOCITY_GAIN"]),
+            "position_gain": float(cfg["PREDICTION_POSITION_GAIN"]),
+        }
+
+    @staticmethod
+    def _memory_settings() -> dict[str, float | int]:
+        cfg = current_app.config
+        return {
+            "max_history": int(cfg["MEMORY_MAX_HISTORY"]),
+            "suspect_increment": float(cfg["MEMORY_SUSPECT_INCREMENT"]),
+            "normal_decay": float(cfg["MEMORY_NORMAL_DECAY"]),
+        }
+
+    @staticmethod
+    def _risk_settings() -> dict[str, float]:
+        cfg = current_app.config
+        return {
+            "ttc_critical_s": float(cfg["RISK_TTC_CRITICAL_S"]),
+            "ttc_medium_s": float(cfg["RISK_TTC_MEDIUM_S"]),
+            "risk_score_high_threshold": float(cfg["RISK_SCORE_HIGH_THRESHOLD"]),
+        }
 
 
 direction_intelligence_service = DirectionIntelligenceService()
