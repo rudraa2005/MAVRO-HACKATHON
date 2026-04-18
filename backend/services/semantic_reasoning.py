@@ -1,8 +1,8 @@
-import math
+﻿import math
 from typing import List
 
 # Default speed threshold (m/s). ~28 km/h
-SPEED_THRESHOLD = 8.0 
+SPEED_THRESHOLD = 8.0
 
 def semantic_reasoning(vehicles: List[dict], dt: float) -> List[dict]:
     """
@@ -14,7 +14,7 @@ def semantic_reasoning(vehicles: List[dict], dt: float) -> List[dict]:
         if "wrong_way_flag" not in vehicle or "angle_dev" not in vehicle:
             # Fallback for silent failure prevention
             pass
-            
+
         # 1. Maintain temporal state
         if "deviation_time" not in vehicle:
             vehicle["deviation_time"] = 0.0
@@ -26,18 +26,18 @@ def semantic_reasoning(vehicles: List[dict], dt: float) -> List[dict]:
             vehicle["deviation_time"] = max(0.0, vehicle["deviation_time"] - dt)
 
         dev_time = vehicle["deviation_time"]
-        
+
         # 2. Compute speed
         vx = vehicle.get("vx", 0.0)
         vy = vehicle.get("vy", 0.0)
         speed = math.sqrt(vx**2 + vy**2)
-        
+
         # Normalize angle (Handle Radians to Degrees)
         # Note: We check if it is within a small limit like 2*pi, but for safety math.pi is fine
         angle_dev = vehicle.get("angle_dev", 0.0)
         if angle_dev <= math.pi and angle_dev > 0:
             angle_dev = math.degrees(angle_dev)
-            
+
         # 9. Edge Cases (Zero velocity)
         if speed == 0.0:
             vehicle["class"] = "normal"
@@ -46,13 +46,13 @@ def semantic_reasoning(vehicles: List[dict], dt: float) -> List[dict]:
             vehicle["is_high_risk"] = False
             vehicle["severity"] = "low"
             # Optional debug:
-            # print(f"[Semantic] ID:{vehicle.get('id', 'Unknown')} → normal (Vehicle is stationary)")
+            # print(f"[Semantic] ID:{vehicle.get('id', 'Unknown')} â†’ normal (Vehicle is stationary)")
             continue
-        
+
         # 3. Classification Rules (CORE LOGIC)
         classification = "normal"
         reason = "Normal driving behavior"
-        
+
         if angle_dev > 150 and dev_time > 3:
             classification = "wrong_way"
             reason = f"Sustained opposite direction > 3s (dev: {dev_time:.1f}s)"
@@ -83,7 +83,7 @@ def semantic_reasoning(vehicles: List[dict], dt: float) -> List[dict]:
         else:
             # Normal
             confidence = 1.0
-            
+
         # 7. Add Severity
         if classification == "wrong_way":
             severity = "high"
@@ -91,14 +91,14 @@ def semantic_reasoning(vehicles: List[dict], dt: float) -> List[dict]:
             severity = "medium"
         else:
             severity = "low"
-            
+
         # Write formatted output (Updates in-place)
         vehicle["class"] = classification
         vehicle["confidence"] = round(max(0.0, min(1.0, confidence)), 2) # Ensure within [0,1]
         vehicle["reason"] = reason
         vehicle["severity"] = severity
-        
-        # 🔥 Bonus: High Risk identifier
+
+        # ðŸ”¥ Bonus: High Risk identifier
         vehicle["is_high_risk"] = True if classification == "wrong_way" else False
 
         # 8. Debug print

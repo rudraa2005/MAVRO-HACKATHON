@@ -1,8 +1,8 @@
-from semantic_reasoning import run_semantic
-from compute_spatial import run_spatial
-from decision import run_decision, debug_print_pipeline
+﻿from backend.services.semantic_reasoning import run_semantic
+from backend.services.compute_spatial import run_spatial
+from backend.services.decision import debug_print_pipeline, run_decision
 
-# 🔹 Mock detect()
+# ðŸ”¹ Mock detect()
 def detect(vehicles):
     for v in vehicles:
         # simple logic: negative vx = wrong way
@@ -11,23 +11,23 @@ def detect(vehicles):
     return vehicles
 
 def run_tests():
-    # 🔹 TEST VEHICLES (VERY IMPORTANT)
+    # ðŸ”¹ TEST VEHICLES (VERY IMPORTANT)
     vehicles = [
-        # 🚨 Wrong way fast vehicle
+        # ðŸš¨ Wrong way fast vehicle
         {
             "id": 1,
             "x": 0, "y": 0,
             "vx": -10, "vy": 0
         },
 
-        # 🚗 Normal vehicle
+        # ðŸš— Normal vehicle
         {
             "id": 2,
             "x": 20, "y": 0,
             "vx": 5, "vy": 0
         },
 
-        # ⚠️ Risky angled fast vehicle
+        # âš ï¸ Risky angled fast vehicle
         {
             "id": 3,
             "x": 10, "y": 5,
@@ -35,10 +35,10 @@ def run_tests():
         }
     ]
 
-    # 🔁 Run multiple frames (simulate time)
+    # ðŸ” Run multiple frames (simulate time)
     for step in range(1, 11):
         print(f"\n==================== STEP {step} ====================")
-        
+
         # NOTE: Update positions based on velocity to simulate realistic movement
         for v in vehicles:
             v["x"] += v["vx"] * 0.5
@@ -50,8 +50,8 @@ def run_tests():
         vehicles = run_decision(vehicles)
 
         debug_print_pipeline(vehicles)
-        
-        # ✅ STEP 5: ADD ASSERTIONS (PRO LEVEL)
+
+        # âœ… STEP 5: ADD ASSERTIONS (PRO LEVEL)
         for v in vehicles:
             assert "class" in v, f"Missing 'class' in vehicle {v['id']}"
             assert "risk" in v, f"Missing 'risk' in vehicle {v['id']}"

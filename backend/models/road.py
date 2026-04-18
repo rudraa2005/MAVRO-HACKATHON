@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 
@@ -51,4 +51,3 @@ class RoadSegment(db.Model):
             "poi_density": self.poi_density,
             "geometry": self.geometry,
         }
-

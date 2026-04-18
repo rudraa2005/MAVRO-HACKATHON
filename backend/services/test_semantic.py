@@ -1,5 +1,5 @@
-import copy
-from semantic_reasoning import run_semantic
+﻿import copy
+from backend.services.semantic_reasoning import run_semantic
 
 def run_tests():
     print("=== TEST 1 & 2: TEMPORAL BEHAVIOR & MULTIPLE FRAMES ===")
@@ -27,7 +27,7 @@ def run_tests():
         # Noise spike (one frame)
         {"id": "Edge3-Noise", "x": 0, "y": 0, "vx": -10, "vy": 0, "wrong_way_flag": True, "angle_dev": 180, "deviation_time": 0.0}
     ]
-    
+
     res = run_semantic(copy.deepcopy(edge_vehicles), dt=0.5)
     for v in res:
         print(f"ID:{v['id']} -> {v['class']} ({v.get('reason','')})")

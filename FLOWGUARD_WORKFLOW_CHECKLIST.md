@@ -1,4 +1,4 @@
-# FlowGuard Workflow Implementation Checklist
+﻿# FlowGuard Workflow Implementation Checklist
 
 This checklist maps the current codebase to the proposed FlowGuard workflow and estimates how much of the system is actually implemented today.
 
@@ -184,4 +184,3 @@ Status key:
 3. Create a unified alert payload and expose it through a dedicated API.
 4. Extend the frontend with predicted paths, collision markers, and road-risk heat layers.
 5. Fix the failing two-way reverse-heading map-matching test before building on top of that module.
-
