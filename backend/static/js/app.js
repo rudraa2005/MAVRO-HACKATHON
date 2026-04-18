@@ -298,7 +298,15 @@ function buildVehiclePopup(vehicle) {
                 <span>Temporal</span><strong>${escapeHtml(vehicle.temporal_state || "NORMAL")}</strong>
                 <span>Risk</span><strong>${escapeHtml(vehicle.risk_level || "low")}</strong>
                 <span>Memory</span><strong>${formatNumber(vehicle.risk_score, 2)}</strong>
+                <span>Refined Risk</span><strong>${formatNumber(vehicle.risk_score_refined, 2)}</strong>
+                <span>ML Collision Prob.</span><strong>${formatNumber((vehicle.ml_collision_probability || 0) * 100, 0)}%</strong>
+                <span>Collision Prob.</span><strong>${formatNumber((vehicle.collision_probability || 0) * 100, 0)}%</strong>
+                <span>Anomaly Score</span><strong>${formatNumber(vehicle.anomaly_score, 3)}</strong>
+                <span>Time To Action</span><strong>${vehicle.time_to_action == null ? "--" : `${formatNumber(vehicle.time_to_action, 2)} s`}</strong>
+                <span>Uncertainty</span><strong>${formatNumber(vehicle.uncertainty, 3)}</strong>
                 <span>Violations</span><strong>${formatNumber(vehicle.violation_count, 0)}</strong>
+                <span>Cluster Size</span><strong>${formatNumber(vehicle.cluster_size, 0)}</strong>
+                <span>Behavior Cluster</span><strong>${escapeHtml(vehicle.behavior_cluster_name || "--")}</strong>
                 <span>Collision With</span><strong>${vehicle.collision_with ?? "--"}</strong>
             </div>
         </div>
@@ -823,6 +831,9 @@ function renderVehicleAnalytics() {
             <div class="detail-grid">
                 <span>Current TTC</span><strong>${vehicle.ttc == null ? "--" : `${formatNumber(vehicle.ttc, 2)} s`}</strong>
                 <span>Prediction State</span><strong>${escapeHtml((vehicle.prediction_state || []).join(", ") || "--")}</strong>
+                <span>ML Collision Probability</span><strong>${formatNumber((vehicle.ml_collision_probability || 0) * 100, 0)}%</strong>
+                <span>Collision Probability</span><strong>${formatNumber((vehicle.collision_probability || 0) * 100, 0)}%</strong>
+                <span>Time To Action</span><strong>${vehicle.time_to_action == null ? "--" : `${formatNumber(vehicle.time_to_action, 2)} s`}</strong>
             </div>
         </div>
 
@@ -831,8 +842,17 @@ function renderVehicleAnalytics() {
             <div class="detail-grid">
                 <span>Spatial Risk</span><strong>${escapeHtml(vehicle.risk || "safe")}</strong>
                 <span>Memory Score</span><strong>${formatNumber(vehicle.risk_score, 2)}</strong>
+                <span>Refined Risk</span><strong>${formatNumber(vehicle.risk_score_refined, 2)}</strong>
                 <span>Final Risk</span><strong>${escapeHtml(vehicle.risk_level || "low")}</strong>
                 <span>Future Steps</span><strong>${formatNumber((vehicle.future_positions || []).length, 0)}</strong>
+                <span>Uncertainty</span><strong>${formatNumber(vehicle.uncertainty, 3)}</strong>
+                <span>Cluster Size</span><strong>${formatNumber(vehicle.cluster_size, 0)}</strong>
+                <span>Anomaly Score</span><strong>${formatNumber(vehicle.anomaly_score, 3)}</strong>
+                <span>Anomalous</span><strong>${vehicle.is_anomalous ? "Yes" : "No"}</strong>
+                <span>Behavior Cluster</span><strong>${escapeHtml(vehicle.behavior_cluster_name || "--")}</strong>
+                <span>Repeat Behavior</span><strong>${formatNumber(vehicle.repeat_behavior_score, 3)}</strong>
+                <span>Safe Actions</span><strong>${escapeHtml((vehicle.safe_actions || []).join(", ") || "--")}</strong>
+                <span>Unsafe Actions</span><strong>${escapeHtml((vehicle.unsafe_actions || []).join(", ") || "--")}</strong>
             </div>
             ${buildSparkline(riskSeries, "#b94a48")}
         </div>
@@ -853,11 +873,12 @@ function renderRiskMonitoring() {
             <tr>
                 <td>${vehicle.id}</td>
                 <td>${vehicle.ttc == null ? "--" : `${formatNumber(vehicle.ttc, 2)} s`}</td>
-                <td>${formatNumber(vehicle.risk_score, 2)}</td>
-                <td><span class="inline-badge" style="--badge-color:${riskColor(vehicle.risk_level)}">${escapeHtml(vehicle.risk_level || "low")}</span></td>
+                <td>${formatNumber(vehicle.risk_score_refined, 2)}</td>
+                <td>${vehicle.collision_with ?? "--"}</td>
+                <td><span class="inline-badge" style="--badge-color:${riskColor(vehicle.risk_level)}">${escapeHtml(vehicle.alert || vehicle.risk_level || "low")}</span></td>
             </tr>
         `).join("")
-        : '<tr><td colspan="4" class="table-empty">No risk telemetry available.</td></tr>'
+        : '<tr><td colspan="5" class="table-empty">No risk telemetry available.</td></tr>'
 
     if (!state.riskTimeline.length) {
         dom.riskTimeline.innerHTML = '<div class="detail-empty">Risk timeline will appear once live data is streaming.</div>'

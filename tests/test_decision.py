@@ -16,13 +16,13 @@ run_decision = decision_module.run_decision
 
 
 class DecisionLayerTests(unittest.TestCase):
-    def test_ttc_below_two_triggers_collision_alert(self) -> None:
+    def test_high_collision_probability_triggers_collision_alert(self) -> None:
         vehicles = [
             {
                 "id": 1,
-                "class": "wrong_way",
-                "risk_level": "high",
-                "ttc": 1.2,
+                "collision_probability": 0.82,
+                "risk_score_refined": 8.2,
+                "temporal_state": "CONFIRMED",
             }
         ]
 
@@ -30,13 +30,13 @@ class DecisionLayerTests(unittest.TestCase):
 
         self.assertEqual(result[0]["alert"], "COLLISION_ALERT")
 
-    def test_high_risk_level_triggers_high_alert(self) -> None:
+    def test_high_refined_risk_triggers_high_alert(self) -> None:
         vehicles = [
             {
                 "id": 2,
-                "class": "normal",
-                "risk_level": "high",
-                "ttc": None,
+                "collision_probability": 0.25,
+                "risk_score_refined": 6.5,
+                "temporal_state": "CONFIRMED",
             }
         ]
 
@@ -44,13 +44,13 @@ class DecisionLayerTests(unittest.TestCase):
 
         self.assertEqual(result[0]["alert"], "HIGH_ALERT")
 
-    def test_medium_risk_level_triggers_warning(self) -> None:
+    def test_suspect_triggers_warning(self) -> None:
         vehicles = [
             {
                 "id": 3,
-                "class": "risky",
-                "risk_level": "medium",
-                "ttc": 4.5,
+                "collision_probability": 0.1,
+                "risk_score_refined": 4.0,
+                "temporal_state": "SUSPECT",
             }
         ]
 
@@ -62,9 +62,9 @@ class DecisionLayerTests(unittest.TestCase):
         vehicles = [
             {
                 "id": 4,
-                "class": "normal",
-                "risk_level": "low",
-                "ttc": None,
+                "collision_probability": 0.0,
+                "risk_score_refined": 2.1,
+                "temporal_state": "NORMAL",
             }
         ]
 

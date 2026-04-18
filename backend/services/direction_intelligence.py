@@ -15,6 +15,7 @@ frontend only needs a single poll endpoint.
 from __future__ import annotations
 
 from copy import deepcopy
+import math
 import threading
 import time
 from typing import Any
@@ -25,6 +26,7 @@ from backend.services.anomaly_memory import reset_vehicle_memory, update_memory
 from backend.services.compute_spatial import compute_spatial
 from backend.services.decision import run_decision
 from backend.services.map_matching import map_matching_service
+from backend.services.ml_intelligence import enrich_ml_signals, reset_ml_state
 from backend.services.prediction import predict_trajectory, reset_prediction_memory
 from backend.services.risk_engine import run_risk_engine
 from direction_intelligence_core import DirectionIntelligenceEngine, DirectionProbe
@@ -124,6 +126,9 @@ class DirectionIntelligenceService:
             if result.is_violation:
                 violations += 1
             result_dict = result.to_dict()
+            direction_similarity = float(result_dict.get("direction_similarity", 1.0))
+            clamped_similarity = min(1.0, max(-1.0, direction_similarity))
+            angle_dev = math.degrees(math.acos(clamped_similarity))
             semantic_class = "normal"
             if result.is_violation:
                 semantic_class = "wrong_way"
@@ -140,6 +145,16 @@ class DirectionIntelligenceService:
                     "road_segment_id": vehicle.road_segment_id,
                     "wrong_way": vehicle.wrong_way,
                     "behavior": vehicle.behavior,
+                    "alignment": round(direction_similarity, 4),
+                    "direction_score": round(result_dict["wrong_way_probability"], 4),
+                    "angle_dev": round(angle_dev, 3),
+                    "is_stable": result_dict["stable"],
+                    "deviation_time": result_dict["sustained_duration_s"],
+                    "temporal_state_encoded": {
+                        "NORMAL": 0,
+                        "SUSPECT": 1,
+                        "CONFIRMED": 2,
+                    }.get(result_dict["temporal_state"], 0),
                     "semantic_class": semantic_class,
                     "class": semantic_class,
                 }
@@ -148,6 +163,7 @@ class DirectionIntelligenceService:
 
         direction_results = update_memory(direction_results)
         direction_results = compute_spatial(direction_results)
+        direction_results = enrich_ml_signals(direction_results)
         direction_results = [predict_trajectory(vehicle) for vehicle in direction_results]
         direction_results = run_risk_engine(direction_results)
         direction_results = run_decision(direction_results)
@@ -178,6 +194,7 @@ class DirectionIntelligenceService:
             self._last_result = None
             reset_vehicle_memory()
             reset_prediction_memory()
+            reset_ml_state()
 
     # ── internals ─────────────────────────────────────────────────────────
 
