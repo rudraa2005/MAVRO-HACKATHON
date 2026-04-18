@@ -6,6 +6,15 @@ import math
 from typing import Any
 
 import numpy as np
+import os
+import joblib
+import torch
+from backend.models.logistic_gpu import LogisticRiskModel
+from backend.eval.clean_features import extract_clean_features, CLEAN_FEATURE_NAMES
+
+# Paths to production artifacts
+_MODEL_PATH = "backend/models/final_model.pt"
+_SCALER_PATH = "backend/models/final_model_scaler.pkl"
 
 
 TEMPORAL_ENCODING = {
@@ -303,7 +312,27 @@ class SimpleKMeans:
         return labels
 
 
-_LOGISTIC_MODEL = LogisticRiskModel.train_synthetic()
+_LOGISTIC_MODEL = None
+_SCALER = None
+
+def _get_production_model():
+    global _LOGISTIC_MODEL, _SCALER
+    if _LOGISTIC_MODEL is None:
+        if os.path.exists(_MODEL_PATH) and os.path.exists(_SCALER_PATH):
+            try:
+                _LOGISTIC_MODEL = LogisticRiskModel.load(_MODEL_PATH)
+                _SCALER = joblib.load(_SCALER_PATH)
+                print(f"[ML INFO] Loaded production model from {_MODEL_PATH}")
+            except Exception as e:
+                print(f"[ML WARNING] Failed to load production model: {e}")
+                _LOGISTIC_MODEL = LogisticRiskModel.train_synthetic()
+        else:
+            print("[ML INFO] Production model not found, using synthetic fallback.")
+            _LOGISTIC_MODEL = LogisticRiskModel.train_synthetic()
+            _SCALER = None  # Synthetic model has its own normalization
+    return _LOGISTIC_MODEL, _SCALER
+
+
 _ANOMALY_FOREST = SimpleIsolationForest()
 _KMEANS_MODEL = SimpleKMeans()
 
@@ -414,10 +443,47 @@ def apply_learned_risk_model(vehicles: list[dict[str, Any]]) -> list[dict[str, A
     if not vehicles:
         return vehicles
 
-    X = _logistic_features(vehicles)
-    probabilities = _LOGISTIC_MODEL.predict_proba(X)
-    for vehicle, probability in zip(vehicles, probabilities, strict=False):
-        vehicle["ml_collision_probability"] = round(float(probability), 4)
+    model, scaler = _get_production_model()
+    if model is None:
+        return vehicles
+
+    # Convert vehicle list to DataFrame for the clean feature extractor
+    # We must ensure all required columns are present or mapped
+    df_raw = pd.DataFrame(vehicles)
+    
+    # Map internal keys to expected eval keys if necessary
+    # engine.py snap_vehicles uses: id, speed, bearing, angle_diff, gps_quality, etc.
+    # clean_features expects: speed, dev_angle, bearing, timestamp, vehicle_id, label
+    mapping = {
+        "id": "vehicle_id",
+        "speed": "speed_mps",
+        "angle_diff": "dev_angle",
+    }
+    for k_orig, k_new in mapping.items():
+        if k_orig in df_raw.columns and k_new not in df_raw.columns:
+            df_raw[k_new] = df_raw[k_orig]
+    
+    # Label is not needed for inference, but extract_clean_features expects it
+    if "label" not in df_raw.columns:
+        df_raw["label"] = 0
+
+    try:
+        X_clean, _ = extract_clean_features(df_raw)
+        X_vals = X_clean[CLEAN_FEATURE_NAMES].values
+        
+        # Apply production scaler if available
+        if scaler is not None:
+            X_vals = scaler.transform(X_vals)
+
+        probabilities = model.predict_proba(X_vals)
+        
+        for vehicle, probability in zip(vehicles, probabilities, strict=False):
+            vehicle["ml_collision_probability"] = round(float(probability), 4)
+            # Threshold gating for the dashboard (Realistic behavior)
+            vehicle["is_wrong_way_ml"] = bool(probability > 0.75)
+    except Exception as e:
+        print(f"[ML ERROR] Live inference failed: {e}")
+
     return vehicles
 
 

@@ -10,7 +10,7 @@ import numpy as np
 EARTH_RADIUS_M = 6_371_000.0
 MAX_INTERACTION_DISTANCE_M = 50.0
 DEFAULT_COLLISION_DISTANCE_M = 4.0
-DEFAULT_MONTE_CARLO_SIMS = 50
+DEFAULT_MONTE_CARLO_SIMS = 75
 DEFAULT_MONTE_CARLO_HORIZON_S = 4.0
 DEFAULT_MONTE_CARLO_STEPS = 6
 DEFAULT_REACTION_TIME_S = 1.0
@@ -88,10 +88,21 @@ def _pair_monte_carlo_metrics(
     rng = np.random.default_rng(_vehicle_seed(vehicle_a, vehicle_b))
     times = np.linspace(0.5, horizon_s, max(2, steps))
 
-    noise_ax = rng.normal(0.0, 0.5, size=(n, 1))
-    noise_ay = rng.normal(0.0, 0.5, size=(n, 1))
-    noise_bx = rng.normal(0.0, 0.5, size=(n, 1))
-    noise_by = rng.normal(0.0, 0.5, size=(n, 1))
+    # Fix 1: Scale noise with speed (faster = more uncertainty)
+    speed_a = float(vehicle_a.get("speed", vehicle_a.get("speed_mps", 0.0)) or 0.0)
+    speed_b = float(vehicle_b.get("speed", vehicle_b.get("speed_mps", 0.0)) or 0.0)
+    
+    noise_scale_a = 0.1 + 0.02 * speed_a
+    noise_scale_b = 0.1 + 0.02 * speed_b
+
+    noise_ax = rng.normal(0.0, noise_scale_a, size=(n, 1))
+    noise_ay = rng.normal(0.0, noise_scale_a, size=(n, 1))
+    noise_bx = rng.normal(0.0, noise_scale_b, size=(n, 1))
+    noise_by = rng.normal(0.0, noise_scale_b, size=(n, 1))
+
+    # Fix 2: Dynamic collision radius based on combined speed
+    base_radius = collision_distance_m
+    dynamic_radius = base_radius + 0.1 * (speed_a + speed_b)
 
     pos_a_x = float(vehicle_a["x"]) + (float(vehicle_a["vx"]) + noise_ax) * times
     pos_a_y = float(vehicle_a["y"]) + (float(vehicle_a["vy"]) + noise_ay) * times
@@ -99,8 +110,16 @@ def _pair_monte_carlo_metrics(
     pos_b_y = float(vehicle_b["y"]) + (float(vehicle_b["vy"]) + noise_by) * times
 
     distances = np.sqrt((pos_b_x - pos_a_x) ** 2 + (pos_b_y - pos_a_y) ** 2)
-    collision_hits = np.any(distances < collision_distance_m, axis=1)
+    
+    # Fix 3: Smooth collision detection
+    # Using exponential decay for a less "harsh" binary cutoff
+    collision_prob_matrix = np.exp(-distances / dynamic_radius)
+    collision_hits = np.any(collision_prob_matrix > 0.5, axis=1)
+    
     collision_probability = float(np.mean(collision_hits))
+
+    if collision_probability > 0.05:
+        print(f"[MC DEBUG] Pair A:{vehicle_a.get('id')} B:{vehicle_b.get('id')} | Sims: {n} | Prob: {collision_probability:.3f} | Radius: {dynamic_radius:.1f}m")
 
     simulated_positions = np.stack(
         [pos_a_x, pos_a_y, pos_b_x, pos_b_y],
