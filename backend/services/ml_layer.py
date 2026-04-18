@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import statistics
+import threading
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -40,6 +41,10 @@ class HumanAgent:
 
 
 class LiveTrafficIntelligence:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._last_selected_vehicle_id: int | None = None
+
     def build_snapshot(self, selected_vehicle_id: int | None = None) -> dict:
         vehicles = Vehicle.query.order_by(Vehicle.id).all()
         roads = RoadSegment.query.order_by(RoadSegment.id).all()
@@ -47,7 +52,9 @@ class LiveTrafficIntelligence:
         now = max((vehicle.timestamp for vehicle in vehicles), default=0.0)
 
         humans = self._build_humans(roads, pois, now)
-        selected_vehicle = self._select_vehicle(vehicles, selected_vehicle_id)
+        selected_vehicle, selection_source = self._select_vehicle(vehicles, selected_vehicle_id)
+        with self._lock:
+            self._last_selected_vehicle_id = selected_vehicle.id if selected_vehicle else None
         vehicle_predictions = {
             vehicle.id: simulation_engine.predict_vehicle_path(vehicle)
             for vehicle in vehicles
@@ -66,6 +73,7 @@ class LiveTrafficIntelligence:
 
         return {
             "selected_vehicle_id": selected_vehicle.id if selected_vehicle else None,
+            "selection_source": selection_source,
             "humans": [human.to_dict() for human in humans],
             "heatmap": heatmap,
             "collision_predictions": collisions,
@@ -85,15 +93,24 @@ class LiveTrafficIntelligence:
         self,
         vehicles: list[Vehicle],
         selected_vehicle_id: int | None,
-    ) -> Vehicle | None:
+    ) -> tuple[Vehicle | None, str]:
+        if not vehicles:
+            return None, "empty_fleet"
+
         if selected_vehicle_id is not None:
             for vehicle in vehicles:
                 if vehicle.id == selected_vehicle_id:
-                    return vehicle
+                    return vehicle, "client_selected"
+        with self._lock:
+            sticky_id = self._last_selected_vehicle_id
+        if sticky_id is not None:
+            for vehicle in vehicles:
+                if vehicle.id == sticky_id:
+                    return vehicle, "sticky_previous"
         for vehicle in vehicles:
             if vehicle.wrong_way:
-                return vehicle
-        return vehicles[0] if vehicles else None
+                return vehicle, "auto_wrong_way"
+        return vehicles[0], "auto_first_vehicle"
 
     def _build_humans(
         self,
@@ -433,6 +450,7 @@ class LiveTrafficIntelligence:
             "trajectory": trajectory,
             "temporal_analysis": self._temporal_analysis(history),
             "behavioral_awareness": behavior,
+            "surrounding_context": self._surrounding_context(vehicle, collisions),
             "route_risk": path_risks[:8],
             "collision_predictions": selected_collisions[:6],
         }
@@ -463,7 +481,75 @@ class LiveTrafficIntelligence:
             "profile": vehicle.behavior,
             "recommended_gap_seconds": gap_seconds,
             "awareness_flags": flags,
+            "speed_variability_mps": round(speed_std, 3),
+            "recent_speed_avg_mps": round(statistics.fmean(recent_speeds), 2) if recent_speeds else 0.0,
             "narrative": self._behavior_narrative(vehicle, flags),
+        }
+
+    def _surrounding_context(self, selected_vehicle: Vehicle, collisions: list[dict]) -> dict:
+        all_vehicles = Vehicle.query.order_by(Vehicle.id).all()
+        nearby_vehicles: list[dict] = []
+        for vehicle in all_vehicles:
+            if vehicle.id == selected_vehicle.id:
+                continue
+            distance_m = haversine_distance_m(
+                selected_vehicle.lat,
+                selected_vehicle.lon,
+                vehicle.lat,
+                vehicle.lon,
+            )
+            nearby_vehicles.append(
+                {
+                    "id": vehicle.id,
+                    "distance_m": round(distance_m, 1),
+                    "relative_speed_mps": round(vehicle.speed_mps - selected_vehicle.speed_mps, 2),
+                    "wrong_way": bool(vehicle.wrong_way),
+                    "behavior": vehicle.behavior,
+                }
+            )
+        nearby_vehicles.sort(key=lambda item: item["distance_m"])
+
+        humans = self._build_humans(
+            RoadSegment.query.order_by(RoadSegment.id).all(),
+            POI.query.order_by(POI.id).all(),
+            selected_vehicle.timestamp,
+        )
+        nearby_humans: list[dict] = []
+        for human in humans:
+            distance_m = haversine_distance_m(
+                selected_vehicle.lat,
+                selected_vehicle.lon,
+                human.lat,
+                human.lon,
+            )
+            nearby_humans.append(
+                {
+                    "id": human.id,
+                    "distance_m": round(distance_m, 1),
+                    "intent": human.intent,
+                    "risk_zone_m": round(human.risk_zone_m, 1),
+                }
+            )
+        nearby_humans.sort(key=lambda item: item["distance_m"])
+
+        collision_count = sum(1 for collision in collisions if collision["involves_selected"])
+        nearest_vehicle_distance = nearby_vehicles[0]["distance_m"] if nearby_vehicles else None
+        nearest_human_distance = nearby_humans[0]["distance_m"] if nearby_humans else None
+        traffic_pressure = min(len(nearby_vehicles[:6]) / 6.0, 1.0)
+        pedestrian_pressure = min(len(nearby_humans[:6]) / 6.0, 1.0)
+        collision_pressure = min(collision_count / 3.0, 1.0)
+        context_risk = round(
+            min(1.0, 0.45 * traffic_pressure + 0.25 * pedestrian_pressure + 0.30 * collision_pressure),
+            3,
+        )
+
+        return {
+            "nearest_vehicle_distance_m": nearest_vehicle_distance,
+            "nearest_human_distance_m": nearest_human_distance,
+            "active_collision_predictions": collision_count,
+            "context_risk_score": context_risk,
+            "nearby_vehicles": nearby_vehicles[:6],
+            "nearby_humans": nearby_humans[:6],
         }
 
     def _temporal_analysis(self, history: list[VehicleHistory]) -> dict:

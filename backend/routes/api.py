@@ -5,6 +5,7 @@ from flask import Blueprint, current_app, jsonify, request
 from backend.models import POI, RoadSegment, Vehicle, VehicleHistory
 from backend.services.bootstrap import bootstrap_input_layer
 from backend.services.direction_intelligence import direction_intelligence_service
+from backend.services.evaluation import evaluate_binary_classifier
 from backend.services.input_layer import FlowGuardInputLayer
 from backend.services.ml_layer import live_traffic_intelligence
 from backend.services.map_matching import map_matching_service
@@ -64,6 +65,47 @@ def live_analysis():
     selected_vehicle_id = request.args.get("vehicle_id", type=int)
     simulation_engine.refresh_network(current_app._get_current_object())
     return jsonify(live_traffic_intelligence.build_snapshot(selected_vehicle_id))
+
+
+@api_bp.get("/analytics/model-metrics")
+def analytics_model_metrics():
+    threshold = request.args.get(
+        "threshold",
+        default=current_app.config["EVAL_WRONG_WAY_THRESHOLD"],
+        type=float,
+    )
+    threshold = min(1.0, max(0.0, float(threshold)))
+
+    analysis = direction_intelligence_service.analyze_live_vehicles()
+    direction_rows = analysis.get("direction", [])
+    if not direction_rows:
+        return jsonify(
+            {
+                "samples": 0,
+                "metrics": {"precision": 0.0, "recall": 0.0, "fpr": 0.0, "tpr": 0.0},
+                "confusion": {"tp": 0, "fp": 0, "tn": 0, "fn": 0},
+                "roc_curve": [],
+                "auc": None,
+                "warnings": ["No active vehicles were available for evaluation."],
+            }
+        )
+
+    records = []
+    for row in direction_rows:
+        records.append(
+            {
+                "ground_truth": bool(row.get("wrong_way", False)),
+                "score": row.get(
+                    "wrong_way_probability",
+                    row.get("direction_score", row.get("ml_collision_probability", 0.0)),
+                ),
+            }
+        )
+
+    payload = evaluate_binary_classifier(records, threshold=threshold)
+    payload["score_field"] = "wrong_way_probability"
+    payload["label_field"] = "wrong_way"
+    return jsonify(payload)
 
 
 @api_bp.get("/pois")

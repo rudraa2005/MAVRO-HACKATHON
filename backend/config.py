@@ -58,3 +58,4 @@ class Config:
     MAP_MATCH_MAX_JUMP_SPEED_MPS = float(
         os.getenv("MAP_MATCH_MAX_JUMP_SPEED_MPS", "60.0")
     )
+    EVAL_WRONG_WAY_THRESHOLD = float(os.getenv("EVAL_WRONG_WAY_THRESHOLD", "0.65"))

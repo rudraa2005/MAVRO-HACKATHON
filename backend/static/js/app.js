@@ -378,6 +378,7 @@ function renderCollisions(collisions) {
 
 function updateInsightPanel(analysis) {
   const selected = analysis?.selected_vehicle;
+  const selectionSource = analysis?.selection_source || "unknown";
   const summary = document.getElementById("selected-vehicle-summary");
   const temporal = document.getElementById("temporal-analysis");
   const behavior = document.getElementById("behavior-awareness");
@@ -395,7 +396,8 @@ function updateInsightPanel(analysis) {
 
   const awareness = selected.behavioral_awareness || {};
   const time = selected.temporal_analysis || {};
-  summary.textContent = `Vehicle #${selected.id} selected. ${awareness.narrative || ""}`;
+  const context = selected.surrounding_context || {};
+  summary.textContent = `Vehicle #${selected.id} selected (${selectionSource}). ${awareness.narrative || ""}`;
   temporal.innerHTML = [
     `Trend: ${time.speed_trend || "n/a"}`,
     `Average speed: ${Number(time.average_speed_mps || 0).toFixed(1)} m/s`,
@@ -408,6 +410,10 @@ function updateInsightPanel(analysis) {
   behavior.innerHTML = [
     `Profile: ${awareness.profile || "normal"}`,
     `Recommended gap: ${Number(awareness.recommended_gap_seconds || 0).toFixed(1)}s`,
+    `Speed variability: ${Number(awareness.speed_variability_mps || 0).toFixed(2)} m/s`,
+    `Nearest vehicle: ${context.nearest_vehicle_distance_m ?? "n/a"} m`,
+    `Nearest human: ${context.nearest_human_distance_m ?? "n/a"} m`,
+    `Context risk: ${formatRisk(context.context_risk_score || 0)}`,
     ...(awareness.awareness_flags || []),
   ]
     .map((item) => `<li>${item}</li>`)
