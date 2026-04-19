@@ -44,7 +44,21 @@ async function api(path, options = {}) {
 function setStatus(msg, type) {
     const el = document.getElementById("status-pill");
     el.textContent = msg;
-    el.style.color = type === "error" ? "#e53e3e" : type === "success" ? "#38a169" : "#888";
+    el.style.color = type === "error" ? "#E53E3E" : type === "success" ? "#38A169" : "#718096";
+}
+
+function setBar(id, pct) {
+    const el = document.getElementById(id);
+    if (el) el.style.width = Math.max(0, Math.min(100, pct)) + "%";
+}
+
+function switchTab(tabId) {
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+    const btn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+    const content = document.getElementById(`tab-${tabId}`);
+    if (btn) btn.classList.add("active");
+    if (content) content.classList.add("active");
 }
 
 function riskColor(score) {
@@ -67,7 +81,7 @@ function initMap() {
     }).setView([13.0827, 80.2707], 12);
 
     L.control.zoom({ position: "bottomright" }).addTo(state.map);
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
         maxZoom: 19,
         attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
     }).addTo(state.map);
@@ -109,9 +123,9 @@ function renderRoads(roads) {
         if (!coords.length) return;
         coords.forEach((c) => bounds.push(c));
         L.polyline(coords, {
-            color: r.oneway ? "#666" : "#444",
+            color: r.oneway ? "#94A3B8" : "#CBD5E0",
             weight: r.oneway ? 3 : 2,
-            opacity: r.oneway ? 0.7 : 0.5,
+            opacity: r.oneway ? 0.9 : 0.6,
         }).addTo(state.roadsLayer);
     });
 
@@ -125,8 +139,8 @@ function renderPois(pois) {
     pois.forEach((p) => {
         L.circleMarker([p.lat, p.lon], {
             radius: 3,
-            color: "#555",
-            fillColor: "#555",
+            color: "#CBD5E0",
+            fillColor: "#CBD5E0",
             fillOpacity: 0.6,
             weight: 1,
         }).addTo(state.poisLayer);
@@ -154,15 +168,15 @@ function renderVehicles(vehicles, enhancedTelemetry = {}) {
         const isEvasive = enhanced.cascade_role === "EVASIVE";
         
         // Detailed Color Logic
-        let color = "#6f86a3"; // Normal
-        if (isSelected) color = "#38a169";
-        if (suspicious) color = "#d69e2e";
-        if (isEvasive) color = "#f6e05e"; // Yellow
+        let color = "#4A5568"; // Normal (gray)
+        if (isSelected) color = "#3182CE"; // Blue
+        if (suspicious) color = "#DD6B20"; // Amber
+        if (isEvasive) color = "#D69E2E"; // Yellow
         if (isWrongWay) {
             const intent = enhanced.intent_classification;
-            if (intent === "DELIBERATE") color = "#742a2a"; // Dark red solid
-            else if (intent === "IMPAIRED") color = "#ed8936"; // Orange
-            else color = "#a01515"; // Normal WW Red
+            if (intent === "DELIBERATE") color = "#742a2a";
+            else if (intent === "IMPAIRED") color = "#DD6B20";
+            else color = "#E53E3E";
         }
 
         const radius = isWrongWay || isSelected || isReference ? 7 : 5;
@@ -195,12 +209,20 @@ function renderVehicles(vehicles, enhancedTelemetry = {}) {
         // Smooth move — just update position
         marker.setLatLng(pos);
         
+        const isDemoFocus = v.demo_focus === true;
+        let finalStrokeColor = isSelected ? "var(--success)" : "#FFF";
+        let finalStrokeWeight = isSelected ? 3 : 1.5;
+        if (isDemoFocus && !isSelected) {
+            finalStrokeColor = "var(--info)";
+            finalStrokeWeight = 2.5;
+        }
+
         // Update styling dynamically
         marker.setStyle({ 
-            color: strokeColor, 
+            color: finalStrokeColor, 
             fillColor: color, 
             radius, 
-            weight: strokeWeight, 
+            weight: finalStrokeWeight, 
             fillOpacity: isReference ? 1.0 : 0.9 
         });
 
@@ -414,12 +436,33 @@ function updateVehiclePanel(analysis) {
     if (!sv) {
         emptyEl.style.display = "block";
         detailEl.style.display = "none";
+        ["confidence-panel","alert-reason-box","state-panel","kinematics-panel"].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = "none";
+        });
+        const ke = document.getElementById("kinematics-empty");
+        if (ke) ke.style.display = "block";
         renderSelectedVehicleHeatmap([]);
         return;
     }
 
     emptyEl.style.display = "none";
     detailEl.style.display = "block";
+    ["confidence-panel","state-panel","kinematics-panel"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = "block";
+    });
+    const ke = document.getElementById("kinematics-empty");
+    if (ke) ke.style.display = "none";
+
+    // Populate Kinematics
+    if (sv.kinematics) {
+        document.getElementById("vk-braking").textContent = `${sv.kinematics.braking_distance} m`;
+        document.getElementById("vk-drift").textContent = `${sv.kinematics.heading_drift}°`;
+        document.getElementById("vk-offset").textContent = `${sv.kinematics.lateral_offset} m`;
+        const momentum = Math.min(100, (sv.speed || 0) * 5);
+        document.getElementById("vk-momentum-bar").style.width = momentum + "%";
+    }
 
     document.getElementById("vp-id").textContent = `#${sv.id}`;
     document.getElementById("vp-speed").textContent = `${Number(sv.speed || 0).toFixed(1)} m/s`;
@@ -514,6 +557,58 @@ function updateVehiclePanel(analysis) {
     updateAdvancedIntelPanel(analysis);
 
     renderSelectedVehicleHeatmap(sv.selected_vehicle_heatmap || []);
+
+    // NEW: Confidence circular gauge
+    const confPct = Math.round((sv.confidence || 0) * 100);
+    const cpEl = document.getElementById("cp-fg");
+    const cpPctEl = document.getElementById("cp-pct");
+    if (cpEl && cpPctEl) {
+        const r = 46; const circ = 2 * Math.PI * r;
+        cpEl.style.strokeDasharray = circ;
+        cpEl.style.strokeDashoffset = circ - (sv.confidence || 0) * circ;
+        cpEl.style.stroke = (sv.confidence || 0) > 0.7 ? "var(--danger)" : (sv.confidence || 0) > 0.4 ? "var(--warning)" : "var(--info)";
+        cpPctEl.textContent = confPct + "%";
+    }
+    // Confidence factor bars
+    const anglePct = Math.min(100, Math.round((Math.abs(sv.angle_diff || 0) / 180) * 100));
+    const tempStable = (sv.detection_logic?.temporal_stability || "").toUpperCase() === "STABLE";
+    setBar("cf-direction", anglePct);
+    setBar("cf-temporal", tempStable ? 70 : 30);
+    setBar("cf-semantic", sv.road_class === "primary" || sv.road_class === "trunk" ? 60 : 30);
+    setBar("cf-gps-penalty", 100 - Math.round((sv.gps_stability === "STABLE" ? 95 : 80)));
+
+    // NEW: State transition pills
+    const stateMap = { normal: "sp-normal", suspicious: "sp-suspect", wrong_way: "sp-confirmed" };
+    ["sp-normal", "sp-suspect", "sp-confirmed"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.className = "state-pill";
+    });
+    const activeId = stateMap[sv.state] || "sp-normal";
+    const activePill = document.getElementById(activeId);
+    if (activePill) {
+        if (activeId === "sp-normal") activePill.classList.add("active-normal");
+        else if (activeId === "sp-suspect") activePill.classList.add("active-suspect");
+        else activePill.classList.add("active-confirmed");
+    }
+
+    // NEW: Alert reason box
+    const arbEl = document.getElementById("alert-reason-box");
+    const arbList = document.getElementById("arb-list");
+    if (arbEl && arbList) {
+        if (sv.state === "wrong_way" || sv.state === "suspicious") {
+            arbEl.style.display = "block";
+            const reasons = [];
+            const ang = Number(sv.angle_diff || 0);
+            if (ang > 90) reasons.push(`Opposite heading for ${(ang).toFixed(1)}°`);
+            if (sv.road_class === "primary" || sv.road_class === "trunk") reasons.push("On one-way road segment");
+            if (sv.ttc != null && sv.ttc < 10) reasons.push(`TTC = ${sv.ttc}s (critical threshold)`);
+            const tempSt = (sv.detection_logic?.temporal_stability || "").toUpperCase();
+            if (tempSt === "STABLE") reasons.push("Trajectory confirmed stable");
+            arbList.innerHTML = (reasons.length ? reasons : ["Heading mismatch detected"]).map(r => `<li>${r}</li>`).join("");
+        } else {
+            arbEl.style.display = "none";
+        }
+    }
 
     // Collision list
     const collList = document.getElementById("collision-list");
@@ -623,21 +718,50 @@ function renderSelectedVehicleHeatmap(points) {
     const lons = points.map((p) => p.lon);
     const minLat = Math.min(...lats), maxLat = Math.max(...lats);
     const minLon = Math.min(...lons), maxLon = Math.max(...lons);
-    const pad = 12;
+    const pad = 30;
     const drawW = canvas.width - pad * 2;
     const drawH = canvas.height - pad * 2;
     const latSpan = Math.max(maxLat - minLat, 1e-6);
     const lonSpan = Math.max(maxLon - minLon, 1e-6);
 
+    // Draw path line first
+    ctx.beginPath();
+    ctx.strokeStyle = "rgba(71, 85, 105, 0.4)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    points.forEach((p, i) => {
+        const x = pad + ((p.lon - minLon) / lonSpan) * drawW;
+        const y = pad + (1 - (p.lat - minLat) / latSpan) * drawH;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Draw heatmap points with glow (density simulation)
     points.forEach((p) => {
         const x = pad + ((p.lon - minLon) / lonSpan) * drawW;
         const y = pad + (1 - (p.lat - minLat) / latSpan) * drawH;
-        const intensity = Number(p.intensity || 0.2);
-        const radius = 5 + intensity * 16;
-        const alpha = 0.12 + intensity * 0.45;
+        const val = Number(p.wwp || p.risk || 0.1);
+        
+        const grad = ctx.createRadialGradient(x, y, 0, x, y, 25);
+        if (val > 0.7) {
+            grad.addColorStop(0, "rgba(255, 255, 255, 0.9)");
+            grad.addColorStop(0.2, "rgba(255, 244, 0, 0.7)");
+            grad.addColorStop(0.5, "rgba(255, 69, 0, 0.4)");
+            grad.addColorStop(1, "rgba(255, 0, 0, 0)");
+        } else if (val > 0.4) {
+            grad.addColorStop(0, "rgba(255, 140, 0, 0.6)");
+            grad.addColorStop(0.6, "rgba(255, 69, 0, 0.3)");
+            grad.addColorStop(1, "rgba(255, 0, 0, 0)");
+        } else {
+            grad.addColorStop(0, "rgba(147, 51, 234, 0.4)");
+            grad.addColorStop(0.7, "rgba(88, 28, 135, 0.2)");
+            grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+        }
+        
+        ctx.fillStyle = grad;
         ctx.beginPath();
-        ctx.fillStyle = `rgba(229, 62, 62, ${alpha.toFixed(3)})`;
-        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.arc(x, y, 30, 0, Math.PI * 2);
         ctx.fill();
     });
 }
@@ -684,6 +808,13 @@ async function refreshSnapshot() {
         // Render
         renderVehicles(vehicles, analysis?.enhanced_telemetry);
         renderAnalysis(analysis);
+
+        // Auto-select demo focused vehicle
+        const demoV = vehicles.find(v => v.demo_focus === true);
+        if (demoV && !state.selectedVehicleId) {
+            state.selectedVehicleId = demoV.id;
+            console.log(`Auto-selecting demo vehicle #${demoV.id}`);
+        }
 
         if (!summary.has_data) {
             showEmptyState(true);

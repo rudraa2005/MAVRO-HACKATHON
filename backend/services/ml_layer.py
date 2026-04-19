@@ -801,6 +801,11 @@ class LiveTrafficIntelligence:
             "selected_vehicle_heatmap": selected_heatmap,
             "alert_triggered": alert_triggered,
             "surrounding_context": self._surrounding_context(vehicle, road, heatmap),
+            "kinematics": live_state.get("kinematics", {
+                "braking_distance": 0.0,
+                "heading_drift": 0.0,
+                "lateral_offset": 0.0
+            }),
         }
 
     def _detection_logic(self, vehicle, road, history, live_state: dict | None = None) -> dict:

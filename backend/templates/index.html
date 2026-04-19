@@ -15,7 +15,13 @@
             <h1 class="page-title">Live Traffic Dashboard</h1>
             <p class="page-subtitle">Real-time vehicle tracking, heatmap, and ML intelligence</p>
         </div>
-        <span id="status-pill" class="status-pill">Initializing...</span>
+        <div style="display:flex;align-items:center;gap:14px;">
+            <span style="font-size:0.8rem;font-weight:600;color:var(--success);display:flex;align-items:center;gap:6px;">
+                <span class="pulse-dot" style="width:7px;height:7px;border-radius:50%;background:var(--success);display:inline-block;"></span>
+                System Active
+            </span>
+            <span id="status-pill" class="status-pill">Initializing...</span>
+        </div>
     </div>
 
     <div class="stats-row">
@@ -33,7 +39,9 @@
         </div>
         <div class="stat-box">
             <div class="label">Simulation</div>
-            <div class="value" id="sim-state">—</div>
+            <div class="value" style="font-size:1.1rem; margin-top:8px;">
+                <span id="sim-state" class="status-pill" style="padding:4px 10px; border-radius:6px; background:#F1F5F9;">—</span>
+            </div>
         </div>
     </div>
 
@@ -80,12 +88,25 @@
             </div>
 
             <div class="card">
-                <div class="card-title">Real-World Use Cases</div>
-                <ul style="list-style:none; font-size:0.82rem; color: var(--text-secondary); line-height:1.5;">
-                    <li>Fleet Safety</li>
-                    <li>Urban Traffic Monitoring</li>
-                    <li>Campus Mobility Monitoring</li>
-                </ul>
+                <div class="card-title">Vehicle Physics Kinematics</div>
+                <div id="kinematics-empty" class="empty-state" style="padding:10px;font-size:0.75rem;">Select a vehicle to view live kinematics data.</div>
+                <div id="kinematics-panel" style="display:none; padding: 4px 0;">
+                    <div class="metric-row">
+                        <span class="label">Braking Distance</span>
+                        <span class="value" id="vk-braking">0.0 m</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="label">Heading Drift</span>
+                        <span class="value" id="vk-drift">0.0°</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="label">Lateral Offset</span>
+                        <span class="value" id="vk-offset">0.0 m</span>
+                    </div>
+                    <div style="margin-top:8px; height:4px; background:#EDF2F7; border-radius:2px; overflow:hidden;">
+                        <div id="vk-momentum-bar" style="height:100%; width:40%; background:var(--info); transition: width 0.3s;"></div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -101,12 +122,35 @@
                     </div>
                     <div id="map"></div>
                 </div>
-                <div class="card selected-heatmap-card">
-                    <div class="card-title">Selected Vehicle Heatmap (Live)</div>
-                    <div id="selected-heatmap-empty" class="empty-state" style="padding: 12px; font-size: 0.8rem;">
-                        Select a vehicle to start live heatmap playback.
+                <!-- Bottom Tabs -->
+                <div class="card" style="padding:12px;">
+                    <div class="tabs-nav">
+                        <button class="tab-btn active" data-tab="heatmap" onclick="switchTab('heatmap')">Trajectory Heatmap</button>
+                        <button class="tab-btn" data-tab="alerts" onclick="switchTab('alerts')">Alert Log</button>
+                        <button class="tab-btn" data-tab="rejected" onclick="switchTab('rejected')">Rejected Events</button>
+                        <button class="tab-btn" data-tab="logic" onclick="switchTab('logic')">System Logic</button>
                     </div>
-                    <canvas id="selected-heatmap-canvas" height="120"></canvas>
+                    <div id="tab-heatmap" class="tab-content active" style="background:#0F172A; border-radius:8px; margin-top:8px; padding:12px; position:relative; overflow:hidden;">
+                        <div class="card-title" style="color:white; opacity:0.9; margin-bottom:8px; font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em;">LIVE RISK DENSITY MAP (VIRTUALIZED)</div>
+                        <div id="selected-heatmap-empty" class="empty-state" style="padding:12px;font-size:0.8rem;color:#64748B;">Select a vehicle to start live heatmap playback.</div>
+                        <canvas id="selected-heatmap-canvas" height="140" style="filter: blur(0.5px);"></canvas>
+                        <div style="position:absolute; bottom:8px; right:12px; font-size:0.65rem; color:#475569; font-family:var(--font-mono);">RAW DETECTIONS: ENABLED</div>
+                    </div>
+                    <div id="tab-alerts" class="tab-content">
+                        <div class="card-title">Active Wrong-Way Incidents</div>
+                        <ul id="wrong-way-list-tab" style="list-style:none;font-size:0.85rem;color:var(--text-secondary);"><li>No active incidents.</li></ul>
+                    </div>
+                    <div id="tab-rejected" class="tab-content">
+                        <div class="card-title">False Positive Rejection Log</div>
+                        <ul class="rejection-list">
+                            <li class="rejection-card"><div class="rc-id">Vehicle #12</div><div class="rc-reason">Temporary U-turn near junction — Grace window applied.</div></li>
+                            <li class="rejection-card"><div class="rc-id">Vehicle #8</div><div class="rc-reason">GPS jitter spike (&gt;5m) — Suppressed by noise filter.</div></li>
+                        </ul>
+                    </div>
+                    <div id="tab-logic" class="tab-content">
+                        <div class="card-title">Decision Pipeline</div>
+                        <div class="logic-pipeline">Road Direction → Vehicle Heading → Angle Difference → Temporal Filter → Heuristic Mitigations → Final Decision</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -269,6 +313,88 @@
                         </div>
                     </div>
                 </div>
+            </div>
+
+            <!-- NEW: Confidence Score Panel -->
+            <div class="card" id="confidence-panel" style="display:none;">
+                <div class="card-title">Wrong-Way Confidence Score</div>
+                <div class="confidence-gauge-wrap">
+                    <div class="circular-progress">
+                        <svg viewBox="0 0 110 110">
+                            <circle class="cp-bg" cx="55" cy="55" r="46"></circle>
+                            <circle class="cp-fg" id="cp-fg" cx="55" cy="55" r="46" style="stroke-dasharray:289;stroke-dashoffset:289;"></circle>
+                        </svg>
+                        <div class="cp-pct" id="cp-pct">0%</div>
+                    </div>
+                </div>
+                <div style="margin-top:10px;">
+                    <div class="conf-factor-row">
+                        <div class="conf-factor-label"><span>Direction mismatch</span><span id="cf-d-label">+0%</span></div>
+                        <div class="conf-factor-track"><div class="conf-factor-fill" id="cf-direction" style="width:0%"></div></div>
+                    </div>
+                    <div class="conf-factor-row">
+                        <div class="conf-factor-label"><span>Temporal consistency</span><span>+30%</span></div>
+                        <div class="conf-factor-track"><div class="conf-factor-fill" id="cf-temporal" style="width:0%;background:var(--success)"></div></div>
+                    </div>
+                    <div class="conf-factor-row">
+                        <div class="conf-factor-label"><span>Road semantic risk</span><span>+15%</span></div>
+                        <div class="conf-factor-track"><div class="conf-factor-fill" id="cf-semantic" style="width:0%;background:var(--warning)"></div></div>
+                    </div>
+                    <div class="conf-factor-row">
+                        <div class="conf-factor-label"><span>GPS noise penalty</span><span>-5%</span></div>
+                        <div class="conf-factor-track"><div class="conf-factor-fill" id="cf-gps-penalty" style="width:0%;background:var(--danger)"></div></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- NEW: Alert Reason Box (inline in vehicle panel, shown conditionally) -->
+            <div class="card" id="alert-reason-box" style="display:none;">
+                <div class="arb-title">Alert Reason</div>
+                <ul id="arb-list"></ul>
+            </div>
+
+            <!-- NEW: State Transition Badge -->
+            <div class="card" id="state-panel" style="display:none;">
+                <div class="card-title">Detection State Pipeline</div>
+                <div class="state-transition">
+                    <div class="state-pill" id="sp-normal">Normal</div>
+                    <div class="state-pill" id="sp-suspect">Suspect</div>
+                    <div class="state-pill" id="sp-confirmed">Confirmed</div>
+                </div>
+                <!-- NEW: Confidence Sparkline -->
+                <div class="card-title" style="margin-top:10px;">Risk Propagation Timeline</div>
+                <div class="conf-sparkline">
+                    <div class="conf-bar" style="height:15%;background:#E2E8F0;"></div>
+                    <div class="conf-bar" style="height:25%;background:#E2E8F0;"></div>
+                    <div class="conf-bar" style="height:40%;background:#E2E8F0;"></div>
+                    <div class="conf-bar" style="height:55%;background:var(--warning);"></div>
+                    <div class="conf-bar" style="height:75%;background:var(--warning);"></div>
+                    <div class="conf-bar" style="height:92%;background:var(--danger);"></div>
+                </div>
+                <!-- NEW: Noise Widget -->
+                <div class="card-title" style="margin-top:8px;">GPS Noise Filter Active</div>
+                <div class="noise-widget">
+                    <div class="noise-dot-wrap">
+                        <div class="noise-dot" style="background:#CBD5E0;"></div>
+                        <div class="noise-label">Raw GPS</div>
+                    </div>
+                    <div style="color:var(--muted);font-size:0.9rem;font-weight:700;">&#8594;</div>
+                    <div class="noise-dot-wrap">
+                        <div class="noise-dot" style="background:var(--info);"></div>
+                        <div class="noise-label">Filtered</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- NEW: Heuristic Checklist -->
+            <div class="card">
+                <div class="card-title">False Positive Filters</div>
+                <ul class="heuristic-list">
+                    <li class="heuristic-item checked"><span class="check-icon">✓</span> Junction turning grace window</li>
+                    <li class="heuristic-item checked"><span class="check-icon">✓</span> Parking lane suppression</li>
+                    <li class="heuristic-item checked"><span class="check-icon">✓</span> U-turn zone tolerance</li>
+                    <li class="heuristic-item checked"><span class="check-icon">✓</span> Low-speed reverse suppression</li>
+                </ul>
             </div>
 
             <div class="card" id="intel-panel" style="display: none;">

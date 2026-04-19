@@ -32,15 +32,15 @@ from backend.services.semantic_reasoning import sigmoid_confidence
 # ---------------------------------------------------------------------------
 
 BEHAVIOR_SPEED_FACTORS = {
-    "calm": 0.72,
-    "normal": 0.88,
-    "aggressive": 1.0,
+    "calm": 1.1,
+    "normal": 1.4,
+    "aggressive": 1.8,
 }
 
 BEHAVIOR_GAP_FACTORS = {
-    "calm": 1.28,
-    "normal": 1.0,
-    "aggressive": 0.72,
+    "calm": 0.8,
+    "normal": 0.6,
+    "aggressive": 0.4,
 }
 
 SAFE_DISTANCE_M = 12.0
@@ -98,6 +98,9 @@ class VehicleLive:
     closest_distance_m: float | None = None
     state: str = "normal"
     confidence: float = 0.0
+    lateral_offset: float = 0.0
+    target_speed_mps: float = 0.0
+    demo_focus: bool = False
     heading_deg: float = 0.0
     heading_smooth_deg: float = 0.0
     road_bearing_deg: float = 0.0
@@ -241,6 +244,7 @@ class VehicleSimulationEngine:
                         RouteOption(runtime.id, -1, False)
                     )
                 else:
+                    # Rare natural wrong-way (0.2% chance)
                     self._wrong_way_options.setdefault(runtime.end_node_id, []).append(
                         RouteOption(runtime.id, -1, True)
                     )
@@ -335,11 +339,16 @@ class VehicleSimulationEngine:
 
             # Set wrong-way vehicle
             target_v.segment_id = segment.id
+            # Clear existing demo focus
+            for v in self._vehicles.values():
+                v.demo_focus = False
+
             target_v.direction = -1
             target_v.progress_m = max(segment.length_m * 0.85, min(segment.length_m, 12.0))
             target_v.wrong_way = True
             target_v.wrong_way_until = now + demo_duration
             target_v.state = "wrong_way"
+            target_v.demo_focus = True
             target_v.confidence = 0.7
             target_v.speed_mps = max(
                 self._compute_speed(segment, target_v.behavior) * WRONG_WAY_SPEED_BOOST, 5.0
@@ -577,7 +586,13 @@ class VehicleSimulationEngine:
                 v.wrong_way_until = None
                 v.state = "normal"
 
-        v.speed_mps = round(min(max(target_speed, 2.0), 20.0), 2)
+        # Smooth speed transitions (inertia)
+        v.speed_mps = v.speed_mps * 0.8 + target_speed * 0.2
+        v.speed_mps = round(min(max(v.speed_mps, 2.0), 20.0), 2)
+
+        # Lateral drift (lane behavior)
+        v.lateral_offset += self._rng.uniform(-0.05, 0.05)
+        v.lateral_offset = max(-1.2, min(1.2, v.lateral_offset))
 
         # --- Move along network ---
         remaining_distance = v.speed_mps * dt
@@ -812,6 +827,23 @@ class VehicleSimulationEngine:
             return
 
         target_count = self._app.config["VEHICLE_COUNT"]
+        current_count = len(self._vehicles)
+        
+        # If we have too many, remove some
+        if current_count > target_count:
+            to_remove = current_count - target_count
+            # Get list of candidates (exclude reference vehicle)
+            candidates = [vid for vid in self._vehicles.keys() if vid != self._reference_vehicle_id]
+            for i in range(min(to_remove, len(candidates))):
+                vid = candidates[i]
+                v_live = self._vehicles.pop(vid, None)
+                if v_live:
+                    db_v = db.session.get(Vehicle, v_live.db_id)
+                    if db_v:
+                        db.session.delete(db_v)
+            db.session.commit()
+            return
+
         missing = max(target_count - len(self._vehicles), 0)
         if self._reference_vehicle_id is None and self._vehicles:
             self._reference_vehicle_id = next(iter(self._vehicles.keys()))
@@ -829,8 +861,14 @@ class VehicleSimulationEngine:
             segment = self._rng.choice(segment_pool)
             behavior = self._rng.choices(behaviors, weights=behavior_weights, k=1)[0]
             direction = 1
-            if not segment.oneway and self._rng.random() < 0.35:
+            if not segment.oneway and self._rng.random() < 0.30:
                 direction = -1
+            
+            # Very rare natural wrong way spawn (0.1%)
+            natural_ww = False
+            if segment.oneway and self._rng.random() < 0.001:
+                direction = -1
+                natural_ww = True
             progress = self._rng.uniform(0.0, segment.length_m)
             speed_mps = self._compute_speed(segment, behavior)
             lat, lon, bearing = self._state_from_segment(segment, progress, direction)
@@ -846,7 +884,7 @@ class VehicleSimulationEngine:
                 timestamp=now,
                 direction=direction,
                 progress_m=progress,
-                wrong_way=False,
+                wrong_way=natural_ww,
                 behavior=behavior,
                 state="normal",
                 anomaly_score=0.0,
@@ -872,7 +910,7 @@ class VehicleSimulationEngine:
                     direction=db_v.direction,
                     speed_mps=db_v.speed_mps,
                     behavior=db_v.behavior,
-                    wrong_way=False,
+                    wrong_way=db_v.wrong_way,
                     wrong_way_until=None,
                     lat=db_v.lat,
                     lon=db_v.lon,
@@ -1093,10 +1131,11 @@ class VehicleSimulationEngine:
         return lat, lon, bearing
 
     def _compute_speed(self, segment: SegmentRuntime, behavior: str) -> float:
-        behavior_factor = BEHAVIOR_SPEED_FACTORS.get(behavior, 0.88)
-        base_speed = max(segment.speed_limit_mps * behavior_factor, 5.0)
-        varied = base_speed * self._rng.uniform(0.92, 1.08)
-        return round(min(varied, 20.0), 2)
+        behavior_factor = BEHAVIOR_SPEED_FACTORS.get(behavior, 1.2)
+        # Higher base speed floor for faster feel
+        base_speed = max(segment.speed_limit_mps * behavior_factor, 12.0)
+        varied = base_speed * self._rng.uniform(0.95, 1.1)
+        return round(min(varied, 35.0), 2)
 
     def _vehicle_to_api(self, v: VehicleLive) -> dict:
         seg = self._segments.get(v.segment_id)
@@ -1130,6 +1169,12 @@ class VehicleSimulationEngine:
             "gps_stability": v.gps_stability,
             "edge_case": v.edge_case,
             "reference": bool(v.reference),
+            "demo_focus": v.demo_focus,
+            "kinematics": {
+                "braking_distance": round((v.speed_mps**2) / (2 * 0.7 * 9.81), 2),
+                "heading_drift": self._compute_heading_drift(v),
+                "lateral_offset": round(v.lateral_offset, 2)
+            }
         }
 
     def _circular_mean_deg(self, values: list[float]) -> float:
@@ -1139,6 +1184,14 @@ class VehicleSimulationEngine:
         cos_sum = sum(math.cos(math.radians(v)) for v in values)
         angle = math.degrees(math.atan2(sin_sum, cos_sum))
         return (angle + 360.0) % 360.0
+
+    def _compute_heading_drift(self, v: VehicleLive) -> float:
+        window = list(v._heading_window)
+        if len(window) < 2:
+            return 0.0
+        c_mean = self._circular_mean_deg(window)
+        deviations = [min(abs(h - c_mean), 360.0 - abs(h - c_mean)) for h in window]
+        return round(statistics.fmean(deviations), 2)
 
     def _update_heading_and_confidence(self, v: VehicleLive, segment: SegmentRuntime, now: float) -> None:
         if v._last_lat is None or v._last_lon is None:
@@ -1160,6 +1213,13 @@ class VehicleSimulationEngine:
         v.road_bearing_deg = segment.bearing
         angle_diff = abs(v.heading_smooth_deg - segment.bearing)
         v.angle_diff_deg = min(angle_diff, 360.0 - angle_diff)
+
+        # BUG FIX: If the road is TWO-WAY, going in the opposite direction (B+180) is also legal.
+        if not segment.oneway:
+            opp_bearing = (segment.bearing + 180.0) % 360.0
+            opp_diff = abs(v.heading_smooth_deg - opp_bearing)
+            opp_diff_deg = min(opp_diff, 360.0 - opp_diff)
+            v.angle_diff_deg = min(v.angle_diff_deg, opp_diff_deg)
 
         # Edge-case handling
         edge_case = "NONE"

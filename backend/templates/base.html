@@ -7,19 +7,22 @@
     <title>{% block title %}FlowGuard{% endblock %}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
     {% block head_extra %}{% endblock %}
     <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body data-place="{{ place_name }}" data-poll-interval-ms="{{ poll_interval_ms }}">
     <nav class="nav">
-        <span class="nav-brand">FLOWGUARD</span>
+        <div class="nav-brand">FlowGuard</div>
         <ul class="nav-links">
             <li><a href="/" id="nav-dashboard" {% if active_page == 'dashboard' %}class="active"{% endif %}>Dashboard</a></li>
             <li><a href="/control" id="nav-control" {% if active_page == 'control' %}class="active"{% endif %}>Control</a></li>
             <li><a href="/analytics" id="nav-analytics" {% if active_page == 'analytics' %}class="active"{% endif %}>Analytics</a></li>
             <li><a href="/risk" id="nav-risk" {% if active_page == 'risk' %}class="active"{% endif %}>Risk</a></li>
         </ul>
+        <div style="display:flex;align-items:center;gap:12px;">
+            <span style="font-size:0.78rem;font-weight:600;color:var(--success);">&#9679; Live</span>
+        </div>
     </nav>
 
     {% block content %}{% endblock %}
