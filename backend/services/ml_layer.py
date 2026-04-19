@@ -10,8 +10,11 @@ from datetime import datetime
 import os
 import joblib
 import pandas as pd
+import torch
+import numpy as np
 
 from backend.models import POI, RoadSegment, Vehicle, VehicleHistory
+from backend.models.logistic_gpu import LogisticRiskModel
 from backend.services.geo import (
     cumulative_path_lengths,
     haversine_distance_m,
@@ -85,11 +88,23 @@ class LiveTrafficIntelligence:
         self.cascade_analyzer = CascadeAnalyzer()
 
     def _load_model(self) -> dict | None:
-        if os.path.exists(self._model_path):
+        model_pt = "backend/models/final_model.pt"
+        scaler_pkl = "backend/models/final_model_scaler.pkl"
+        
+        if os.path.exists(model_pt) and os.path.exists(scaler_pkl):
             try:
-                return joblib.load(self._model_path)
+                # Load the GPU-accelerated PyTorch model
+                model = LogisticRiskModel.load(model_pt)
+                # Load the corresponding scaler
+                scaler = joblib.load(scaler_pkl)
+                
+                return {
+                    "model": model,
+                    "scaler": scaler,
+                    "threshold": 0.75  # Calibrated threshold for the production model
+                }
             except Exception as e:
-                print(f"Failed to load calibrated model: {e}")
+                print(f"Failed to load production model artifacts: {e}")
         return None
 
     def build_snapshot(self, selected_vehicle_id: int | None = None) -> dict:
@@ -399,41 +414,85 @@ class LiveTrafficIntelligence:
             model = self._model_data["model"]
             scaler = self._model_data.get("scaler")
             
-            # Feature calculation: dev_angle is the deviation from road bearing
+            # Feature calculation: Aligned with 8-feature clean_features strategy
             road_bearing = road.bearing if road else 0.0
             vehicle_bearing = vehicle.bearing
             angle_diff = abs(((vehicle_bearing - road_bearing + 180.0) % 360.0) - 180.0)
             
-            # Build feature dataframe [speed, dev_angle, anomaly_score, gps_quality]
-            features_dict = {
-                "speed": vehicle.speed_mps,
-                "dev_angle": angle_diff,
-                "anomaly_score": vehicle.anomaly_score,
-                "gps_quality": gps_quality
-            }
-            features_df = pd.DataFrame([features_dict])
+            # 1. speed_mps
+            speed_mps = float(vehicle.speed_mps)
+            
+            # 2. bearing_deviation_deg
+            bearing_dev = float(angle_diff)
+            
+            # 3. sustained_wrong_way_duration_s
+            # Estimate from history: count consecutive points > 130 degrees
+            sustained_s = 0.0
+            if history:
+                # We assume regular sampling (e.g. 1s)
+                for h in reversed(history):
+                    h_dev = abs(((h.bearing - road_bearing + 180.0) % 360.0) - 180.0)
+                    if h_dev > 130:
+                        sustained_s += 1.0
+                    else:
+                        break
+            if bearing_dev > 130:
+                sustained_s += 1.0
+            
+            # 4. gps_noise_estimate (variance of last 5 bearings)
+            bearings = [h.bearing for h in history[-4:]] + [vehicle.bearing]
+            gps_noise = 0.0
+            if len(bearings) >= 2:
+                gps_noise = np.var(bearings)
+            gps_noise = min(gps_noise / 5000.0, 1.0)
+            
+            # 5. speed_x_bearing_interaction
+            interaction = speed_mps * (bearing_dev / 180.0)
+            
+            # 6. road_type_encoded (0=service, 1=urban, 2=highway)
+            road_class = getattr(road, "road_class", "urban") or "urban"
+            road_type_map = {"service": 0, "urban": 1, "highway": 2}
+            road_enc = road_type_map.get(road_class.lower(), 1)
+            
+            # 7 & 8. cyclical time of day
+            dt = datetime.fromtimestamp(current_time)
+            hour_float = dt.hour + dt.minute / 60.0
+            tod_sin = math.sin(2 * math.pi * hour_float / 24.0)
+            tod_cos = math.cos(2 * math.pi * hour_float / 24.0)
+
+            # Build feature array with explicit column names to match training
+            features_df = pd.DataFrame([{
+                "speed_mps": speed_mps,
+                "bearing_deviation_deg": bearing_dev,
+                "sustained_wrong_way_duration_s": sustained_s,
+                "gps_noise_estimate": gps_noise,
+                "speed_x_bearing_interaction": interaction,
+                "road_type_encoded": road_enc,
+                "time_of_day_sin": tod_sin,
+                "time_of_day_cos": tod_cos
+            }])
             
             try:
                 # Apply scaler transform if available
                 if scaler:
+                    # Passing a DataFrame resolves the "X does not have valid feature names" warning
                     X_scaled = scaler.transform(features_df)
                 else:
-                    X_scaled = features_df # Fallback if scaler missing (unlikely)
+                    X_scaled = features_df.values
 
-                calibrated_prob = model.predict_proba(X_scaled)[0][1]
-                confidence = float(calibrated_prob)
+                # PyTorch model returns probabilities directly for class 1
+                probs = model.predict_proba(X_scaled)
+                confidence = float(probs[0])
                 
                 # Apply optimized threshold
-                threshold = self._model_data.get("threshold", 0.5)
+                threshold = self._model_data.get("threshold", 0.75)
                 
                 # Update vehicle state with hysteresis for stability
-                # PRESERVE: Do not downgrade if simulation engine explicitly flags as wrong_way
                 engine_wrong_way = getattr(vehicle, "wrong_way", False)
                 
                 if confidence > threshold or engine_wrong_way:
                     vehicle.state = "wrong_way"
                 elif vehicle.state == "wrong_way" and confidence < (threshold * 0.7):
-                    # Higher hysteresis gap (0.7) for real-world simulation stability
                     vehicle.state = "normal"
             except Exception as e:
                 print(f"Prediction failed: {e}")
