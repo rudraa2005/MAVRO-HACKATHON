@@ -57,6 +57,8 @@ def _direction_similarity(vehicle: dict[str, Any]) -> float:
 def _angle_dev(vehicle: dict[str, Any]) -> float:
     if "angle_dev" in vehicle:
         return _float_value(vehicle.get("angle_dev"))
+    if "angle_diff" in vehicle:
+        return _float_value(vehicle.get("angle_diff"))
     similarity = max(-1.0, min(1.0, _direction_similarity(vehicle)))
     return math.degrees(math.acos(similarity))
 
@@ -507,11 +509,11 @@ def apply_anomaly_detection(vehicles: list[dict[str, Any]]) -> list[dict[str, An
         heuristic_score = min(
             1.0,
             (
-                min(_float_value(vehicle.get("speed", vehicle.get("speed_mps", 0.0))) / 35.0, 1.0) * 0.2
-                + min(_angle_dev(vehicle) / 180.0, 1.0) * 0.25
-                + min(max(0.0, 2.5 - _safe_ttc(vehicle)) / 2.5, 1.0) * 0.25
-                + min(abs(_float_value(vehicle.get("acceleration", 0.0))) / 8.0, 1.0) * 0.15
-                + min(_float_value(vehicle.get("sustained_duration_s", 0.0)) / 4.0, 1.0) * 0.15
+                min(_float_value(vehicle.get("speed", vehicle.get("speed_mps", 0.0))) / 35.0, 1.0) * 0.15
+                + min(_angle_dev(vehicle) / 180.0, 1.0) * 0.40  # Increased weight for bearing-based safety
+                + min(max(0.0, 3.5 - _safe_ttc(vehicle)) / 3.5, 1.0) * 0.20
+                + min(abs(_float_value(vehicle.get("acceleration", 0.0))) / 8.0, 1.0) * 0.10
+                + min(_float_value(vehicle.get("sustained_duration_s", 0.0)) / 2.5, 1.0) * 0.15 # Faster duration penalty
             ),
         )
         final_score = max(float(score), heuristic_score)
