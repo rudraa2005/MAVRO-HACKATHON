@@ -22,6 +22,8 @@ const state = {
     latestAnalysis: null,
     hasData: false,
     pollHandle: null,
+    alertHistory: [],
+    previousAlerts: new Map(), // vehicleId -> boolean
 };
 
 const pollIntervalMs = Number(document.body.dataset.pollIntervalMs || 500);
@@ -580,13 +582,21 @@ function updateVehiclePanel(analysis) {
         cpEl.style.stroke = (sv.confidence || 0) > 0.7 ? "var(--danger)" : (sv.confidence || 0) > 0.4 ? "var(--warning)" : "var(--info)";
         cpPctEl.textContent = confPct + "%";
     }
-    // Confidence factor bars
-    const anglePct = Math.min(100, Math.round((Math.abs(sv.angle_diff || 0) / 180) * 100));
-    const tempStable = (sv.detection_logic?.temporal_stability || "").toUpperCase() === "STABLE";
-    setBar("cf-direction", anglePct);
-    setBar("cf-temporal", tempStable ? 70 : 30);
-    setBar("cf-semantic", sv.road_class === "primary" || sv.road_class === "trunk" ? 60 : 30);
-    setBar("cf-gps-penalty", 100 - Math.round((sv.gps_stability === "STABLE" ? 95 : 80)));
+    // Confidence factor bars (Dynamic from backend)
+    const cbd = sv.confidence_breakdown || { direction: 0, temporal: 0, semantic: 0, gps_penalty: 0 };
+    
+    // Update Bars
+    setBar("cf-direction", cbd.direction * 2); // Scale to 100% since max is 50
+    setBar("cf-temporal", cbd.temporal * 3.33); // Scale to 100% since max is 30
+    setBar("cf-semantic", cbd.semantic * 5); // Scale to 100% since max is 20
+    setBar("cf-gps-penalty", Math.abs(cbd.gps_penalty) * 5); // Scale penalty to bar
+    
+    // Update Labels
+    const fmtCbd = (val) => (val >= 0 ? `+${Math.round(val)}%` : `${Math.round(val)}%`);
+    const dLab = document.getElementById("cf-direction-label"); if (dLab) dLab.textContent = fmtCbd(cbd.direction);
+    const tLab = document.getElementById("cf-temporal-label"); if (tLab) tLab.textContent = fmtCbd(cbd.temporal);
+    const sLab = document.getElementById("cf-semantic-label"); if (sLab) sLab.textContent = fmtCbd(cbd.semantic);
+    const gLab = document.getElementById("cf-gps-label"); if (gLab) gLab.textContent = fmtCbd(cbd.gps_penalty);
 
     // NEW: State transition pills
     const stateMap = { normal: "sp-normal", suspicious: "sp-suspect", wrong_way: "sp-confirmed" };
@@ -788,6 +798,49 @@ function renderAnalysis(analysis) {
     renderCollisions(analysis?.collision_predictions || []);
     renderCascadeTree(analysis?.cascade_tree, state.latestVehicles);
     updateVehiclePanel(analysis);
+    updateAlertLog(analysis);
+}
+
+function updateAlertLog(analysis) {
+    const enhanced = analysis?.enhanced_telemetry || {};
+    const vehicles = state.latestVehicles || [];
+    const now = new Date().toLocaleTimeString();
+    
+    vehicles.forEach(v => {
+        const telemetry = enhanced[v.id];
+        if (!telemetry) return;
+        
+        const isTriggered = telemetry.alert_triggered === true;
+        const wasTriggered = state.previousAlerts.get(v.id) || false;
+        
+        if (isTriggered && !wasTriggered) {
+            // New alert trigger
+            const msg = {
+                id: v.id,
+                time: now,
+                state: v.state,
+                reason: telemetry.intentional_class !== "UNKNOWN" ? telemetry.intentional_class : "Wrong-way detected"
+            };
+            state.alertHistory.unshift(msg); // Add to start
+            if (state.alertHistory.length > 50) state.alertHistory.pop();
+        }
+        state.previousAlerts.set(v.id, isTriggered);
+    });
+
+    const logEl = document.getElementById("wrong-way-list-tab");
+    if (logEl) {
+        if (state.alertHistory.length === 0) {
+            logEl.innerHTML = "<li>No active incidents logged.</li>";
+        } else {
+            logEl.innerHTML = state.alertHistory.map(h => `
+                <li style="margin-bottom:8px; border-bottom:1px solid #f1f5f9; padding-bottom:4px;">
+                    <span style="color:#64748B; font-size:0.75rem;">[${h.time}]</span>
+                    <strong style="color:var(--danger)">ALERT TRIGGERED</strong>: 
+                    Vehicle #${h.id} (${h.state}) — ${h.reason}
+                </li>
+            `).join("");
+        }
+    }
 }
 
 async function refreshAnalysis() {

@@ -217,6 +217,8 @@ async function refresh() {
         const wwp = data.wwp || [];
         const ttc = data.ttc || [];
         const risk = data.risk || [];
+        const monteCarlo = data.monte_carlo || [];
+        const kalman = data.kalman || [];
         const evaluation = data.evaluation || {};
         const roc = data.roc || [];
         const confidenceDistribution = data.confidence_distribution || {};
@@ -224,6 +226,8 @@ async function refresh() {
         drawLineChart("chart-wwp", labels, wwp, { minY: 0, maxY: 1, color: "#d69e2e", decimals: 2 });
         drawLineChart("chart-ttc", labels, ttc, { minY: 0, maxY: 30, color: "#e53e3e", decimals: 1 });
         drawLineChart("chart-risk", labels, risk, { minY: 0, maxY: 1, color: "#5a9bd5", decimals: 2 });
+        drawLineChart("chart-monte-carlo", labels, monteCarlo, { minY: 0, maxY: 1, color: "#ed8936", decimals: 2 });
+        drawLineChart("chart-kalman", labels, kalman, { minY: 0, maxY: 1, color: "#805ad5", decimals: 2 });
         drawScatterChart("chart-roc", roc.map((p) => ({ x: p.fpr, y: p.tpr })), { color: "#e53e3e" });
         const confLabels = Object.keys(confidenceDistribution);
         drawBarChart("chart-confidence", confLabels, confLabels.map((k) => confidenceDistribution[k] || 0), { color: "#38a169" });

@@ -524,6 +524,8 @@ class VehicleSimulationEngine:
                 "bearing": round(v.heading_deg, 1),
                 "angle_diff": round(v.angle_diff_deg, 1),
                 "gps_quality": 1.0 if v.gps_stability == "HIGH" else 0.7 if v.gps_stability == "MEDIUM" else 0.4,
+                "mc_prob": round(v.wwp, 3), # Monte Carlo Proxy
+                "kalman_stability": 1.0 if v.gps_stability == "HIGH" else 0.7 if v.gps_stability == "MEDIUM" else 0.4, # Kalman Proxy
                 "intent": getattr(v, "intent_classification", "UNKNOWN"),
                 "ground_truth_wrong_way": v.wrong_way,
                 "timestamp": now,
