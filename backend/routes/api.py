@@ -243,7 +243,9 @@ def pois():
 
 @api_bp.get("/summary")
 def summary():
-    wrong_way_count = Vehicle.query.filter_by(wrong_way=True).count()
+    # Use in-memory engine snapshot for accurate wrong_way count (avoids DB lag)
+    vehicles_snapshot = simulation_engine.get_vehicles_snapshot()
+    wrong_way_count = sum(1 for v in vehicles_snapshot if v.get("wrong_way"))
     oneway_segments = RoadSegment.query.filter_by(oneway=True).count()
     return {
         "roads": RoadSegment.query.count(),
@@ -449,7 +451,10 @@ def admin_wrong_way_scenario():
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
-    return jsonify(result), 202
+    return jsonify({
+        **result,
+        "auto_select_vehicle_id": result.get("vehicle_id"),
+    }), 202
 
 
 @api_bp.get("/direction/live")

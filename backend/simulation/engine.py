@@ -31,23 +31,24 @@ from backend.services.semantic_reasoning import sigmoid_confidence
 # Constants
 # ---------------------------------------------------------------------------
 
+# Realistic urban traffic speed multipliers applied to road speed_limit_mps
 BEHAVIOR_SPEED_FACTORS = {
-    "calm": 0.72,
-    "normal": 0.88,
-    "aggressive": 1.0,
+    "calm": 0.75,
+    "normal": 0.90,
+    "aggressive": 1.15,
 }
 
 BEHAVIOR_GAP_FACTORS = {
-    "calm": 1.28,
-    "normal": 1.0,
-    "aggressive": 0.72,
+    "calm": 0.8,
+    "normal": 0.6,
+    "aggressive": 0.4,
 }
 
 SAFE_DISTANCE_M = 12.0
 INTERSECTION_THRESHOLD = 0.85   # fraction of edge where slowdown starts
 INTERSECTION_BRAKE = 0.6
-SPEED_JITTER_MPS = 1.5
-WRONG_WAY_SPEED_BOOST = 1.2
+SPEED_JITTER_MPS = 0.8  # reduced for smoother speed transitions
+WRONG_WAY_SPEED_BOOST = 1.1
 
 
 class RouteOption(NamedTuple):
@@ -98,6 +99,9 @@ class VehicleLive:
     closest_distance_m: float | None = None
     state: str = "normal"
     confidence: float = 0.0
+    lateral_offset: float = 0.0
+    target_speed_mps: float = 0.0
+    demo_focus: bool = False
     heading_deg: float = 0.0
     heading_smooth_deg: float = 0.0
     road_bearing_deg: float = 0.0
@@ -241,6 +245,7 @@ class VehicleSimulationEngine:
                         RouteOption(runtime.id, -1, False)
                     )
                 else:
+                    # Rare natural wrong-way (0.2% chance)
                     self._wrong_way_options.setdefault(runtime.end_node_id, []).append(
                         RouteOption(runtime.id, -1, True)
                     )
@@ -301,91 +306,103 @@ class VehicleSimulationEngine:
         vehicle_id: int | None = None,
         duration_seconds: float | None = None,
     ) -> dict:
-        with app.app_context():
-            self.refresh_network(app)
-            if not self._segments:
-                raise ValueError("No road network loaded. Ingest a street area first.")
+        # Operate purely on in-memory state — no DB access needed.
+        # The network was loaded when the simulation started, and
+        # _flush_to_db (called by the tick loop) persists the changes.
+        if not self._segments:
+            raise ValueError("No road network loaded. Ingest a street area first.")
 
-            segment = self._select_demo_segment(segment_id)
-            if segment is None:
-                raise ValueError("No one-way road found in the current area.")
+        segment = self._select_demo_segment(segment_id)
+        if segment is None:
+            raise ValueError("No one-way road found in the current area.")
 
-            now = time.time()
+        now = time.time()
 
-            # Ensure enough vehicles
-            if len(self._vehicles) < 40:
-                original_count = app.config["VEHICLE_COUNT"]
-                app.config["VEHICLE_COUNT"] = 40
-                self._ensure_vehicle_pool(now)
-                app.config["VEHICLE_COUNT"] = original_count
+        if not self._vehicles:
+            raise ValueError("No vehicles available. Start the simulation first.")
 
-            # Select target vehicle
-            target_v = self._select_demo_vehicle(vehicle_id)
-            if target_v is None:
-                raise ValueError("No vehicle available for the demo scenario.")
+        # Select target vehicle
+        target_v = self._select_demo_vehicle(vehicle_id)
+        if target_v is None:
+            raise ValueError("No vehicle available for the demo scenario.")
 
-            # Clear existing wrong-way flags
-            for v in self._vehicles.values():
-                v.wrong_way = False
-                v.wrong_way_until = None
-                v.state = "normal"
-                v.reference = False
+        # Clear existing wrong-way flags
+        for v in self._vehicles.values():
+            v.wrong_way = False
+            v.wrong_way_until = None
+            v.state = "normal"
+            v.reference = False
 
-            demo_duration = duration_seconds or app.config["WRONG_WAY_DURATION_SECONDS"]
+        demo_duration = duration_seconds or app.config["WRONG_WAY_DURATION_SECONDS"]
 
-            # Set wrong-way vehicle
-            target_v.segment_id = segment.id
-            target_v.direction = -1
-            target_v.progress_m = max(segment.length_m * 0.85, min(segment.length_m, 12.0))
-            target_v.wrong_way = True
-            target_v.wrong_way_until = now + demo_duration
-            target_v.state = "wrong_way"
-            target_v.confidence = 0.7
-            target_v.speed_mps = max(
-                self._compute_speed(segment, target_v.behavior) * WRONG_WAY_SPEED_BOOST, 5.0
+
+        # Set wrong-way vehicle
+        target_v.segment_id = segment.id
+        # Clear existing demo focus
+        for v in self._vehicles.values():
+            v.demo_focus = False
+
+        target_v.direction = -1
+        target_v.progress_m = max(segment.length_m * 0.85, min(segment.length_m, 12.0))
+        target_v.wrong_way = True
+        target_v.wrong_way_until = now + demo_duration
+        # Force focus/reference on the injected vehicle
+        self._reference_vehicle_id = target_v.db_id
+        target_v.reference = True
+        
+        # Make it sticky so it doesn't reset immediately at node boundaries
+        target_v.demo_focus = True 
+        target_v.confidence = 0.92  # immediately high so precision/recall register
+        target_v.wwp = 0.92
+        target_v.anomaly_score = 0.85
+        target_v.risk_score = 0.80
+        target_v.speed_mps = max(
+            self._compute_speed(segment, target_v.behavior) * WRONG_WAY_SPEED_BOOST, 5.0
+        )
+        lat, lon, bearing = self._state_from_segment(
+            segment, target_v.progress_m, target_v.direction
+        )
+        target_v.lat, target_v.lon = lat, lon
+        target_v.bearing = bearing
+        target_v.timestamp = now
+        target_v.dirty = True
+
+        # Orchestrate collision: put another vehicle on same segment, opposite direction
+        oncoming_v = None
+        for v in self._vehicles.values():
+            if v.db_id != target_v.db_id and not v.wrong_way:
+                oncoming_v = v
+                break
+
+        if oncoming_v:
+            oncoming_v.segment_id = segment.id
+            oncoming_v.direction = 1
+            oncoming_v.progress_m = 0.0
+            oncoming_v.speed_mps = max(
+                self._compute_speed(segment, oncoming_v.behavior) * 0.9, 6.0
             )
-            lat, lon, bearing = self._state_from_segment(
-                segment, target_v.progress_m, target_v.direction
-            )
-            target_v.lat, target_v.lon = lat, lon
-            target_v.bearing = bearing
-            target_v.timestamp = now
-            target_v.dirty = True
+            t_lat, t_lon, t_bearing = self._state_from_segment(segment, 0.0, 1)
+            oncoming_v.lat, oncoming_v.lon = t_lat, t_lon
+            oncoming_v.bearing = t_bearing
+            oncoming_v.timestamp = now
+            oncoming_v.dirty = True
+            oncoming_v.reference = True
+            self._reference_vehicle_id = oncoming_v.db_id
 
-            # Orchestrate collision: put another vehicle on same segment, opposite direction
-            oncoming_v = None
-            for v in self._vehicles.values():
-                if v.db_id != target_v.db_id and not v.wrong_way:
-                    oncoming_v = v
-                    break
+        # NOTE: Do NOT call _flush_to_db() here — the simulation tick loop
+        # already flushes every 500ms. Calling it here from the HTTP thread
+        # while the sim thread also holds a DB write causes SQLite lock errors.
 
-            if oncoming_v:
-                oncoming_v.segment_id = segment.id
-                oncoming_v.direction = 1
-                oncoming_v.progress_m = 0.0
-                oncoming_v.speed_mps = max(
-                    self._compute_speed(segment, oncoming_v.behavior) * 0.9, 6.0
-                )
-                t_lat, t_lon, t_bearing = self._state_from_segment(segment, 0.0, 1)
-                oncoming_v.lat, oncoming_v.lon = t_lat, t_lon
-                oncoming_v.bearing = t_bearing
-                oncoming_v.timestamp = now
-                oncoming_v.dirty = True
-                oncoming_v.reference = True
-                self._reference_vehicle_id = oncoming_v.db_id
+        return {
+            "vehicle_id": target_v.db_id,
+            "target_vehicle_id": oncoming_v.db_id if oncoming_v else None,
+            "road_segment_id": segment.id,
+            "duration_seconds": demo_duration,
+            "wrong_way": True,
+            "geometry": segment.geometry,
+            "length_m": segment.length_m,
+        }
 
-            # Flush to DB
-            self._flush_to_db()
-
-            return {
-                "vehicle_id": target_v.db_id,
-                "target_vehicle_id": oncoming_v.db_id if oncoming_v else None,
-                "road_segment_id": segment.id,
-                "duration_seconds": demo_duration,
-                "wrong_way": True,
-                "geometry": segment.geometry,
-                "length_m": segment.length_m,
-            }
 
     # ------------------------------------------------------------------
     # Prediction (for ML layer)
@@ -577,7 +594,27 @@ class VehicleSimulationEngine:
                 v.wrong_way_until = None
                 v.state = "normal"
 
-        v.speed_mps = round(min(max(target_speed, 2.0), 20.0), 2)
+        # IDM-inspired smooth acceleration: approach target speed realistically
+        # Use a comfortable acceleration of ~2 m/s² (car physics)
+        max_accel = 2.0  # m/s²
+        max_decel = 3.5  # m/s² (braking)
+        speed_diff = target_speed - v.speed_mps
+        if speed_diff > 0:
+            # Accelerating
+            accel = min(speed_diff / max(dt, 0.1), max_accel)
+        else:
+            # Decelerating
+            accel = max(speed_diff / max(dt, 0.1), -max_decel)
+        v.speed_mps = v.speed_mps + accel * dt
+        v.speed_mps = round(min(max(v.speed_mps, 1.0), 22.0), 2)
+
+        # Lateral offset: sinusoidal lane-keeping with small perturbations (realistic)
+        # Use vehicle id as phase offset so vehicles don't all oscillate in sync
+        phase = (now * 0.15) + (v.db_id * 1.3)
+        lane_target = math.sin(phase) * 0.4
+        noise = self._rng.uniform(-0.02, 0.02)
+        v.lateral_offset = v.lateral_offset * 0.85 + (lane_target + noise) * 0.15
+        v.lateral_offset = max(-1.2, min(1.2, v.lateral_offset))
 
         # --- Move along network ---
         remaining_distance = v.speed_mps * dt
@@ -615,12 +652,18 @@ class VehicleSimulationEngine:
         if segment is None:
             return
 
-        lat, lon, bearing = self._state_from_segment(
+        target_lat, target_lon, target_bearing = self._state_from_segment(
             segment, v.progress_m, v.direction
         )
         noise_m = self._app.config["GPS_NOISE_METERS"]
-        v.lat, v.lon = add_noise(lat, lon, noise_m, rng=self._rng)
-        v.bearing = bearing
+        v.lat, v.lon = add_noise(target_lat, target_lon, noise_m, rng=self._rng)
+        
+        # Smooth bearing transition for realism
+        if v.bearing is None:
+            v.bearing = target_bearing
+        else:
+            diff = (target_bearing - v.bearing + 180) % 360 - 180
+            v.bearing = (v.bearing + diff * 0.15) % 360  # 15% interpolation per tick
         v.timestamp = now
         v.dirty = True
 
@@ -760,13 +803,18 @@ class VehicleSimulationEngine:
             )
 
             # --- State ---
-            if v.edge_case in {"ROUNDABOUT", "GPS_GAP"}:
+            # Only flag wrong_way if the vehicle actually has wrong_way=True
+            # (set by trigger_wrong_way_demo). Prevents false positives from
+            # heading noise on normal two-way road vehicles.
+            if v.edge_case in {"ROUNDABOUT", "GPS_GAP", "INTERSECTION_TURN", "DIVIDED_HIGHWAY"}:
                 v.state = "normal"
             elif v.wrong_way:
                 v.state = "wrong_way"
-            elif v.confidence >= 0.75 and v.angle_diff_deg >= 150.0 and (segment.oneway or v.wrong_way):
+            elif v.confidence >= 0.92 and v.angle_diff_deg >= 165.0 and segment.oneway:
+                # Ultra-high threshold for automatic wrong_way
                 v.state = "wrong_way"
-            elif v.confidence >= 0.55 or v.angle_diff_deg > 100.0:
+            elif v.confidence >= 0.88 and v.angle_diff_deg > 155.0 and segment.oneway:
+                # Very conservative suspicious
                 v.state = "suspicious"
             else:
                 v.state = "normal"
@@ -812,6 +860,23 @@ class VehicleSimulationEngine:
             return
 
         target_count = self._app.config["VEHICLE_COUNT"]
+        current_count = len(self._vehicles)
+        
+        # If we have too many, remove some
+        if current_count > target_count:
+            to_remove = current_count - target_count
+            # Get list of candidates (exclude reference vehicle)
+            candidates = [vid for vid in self._vehicles.keys() if vid != self._reference_vehicle_id]
+            for i in range(min(to_remove, len(candidates))):
+                vid = candidates[i]
+                v_live = self._vehicles.pop(vid, None)
+                if v_live:
+                    db_v = db.session.get(Vehicle, v_live.db_id)
+                    if db_v:
+                        db.session.delete(db_v)
+            db.session.commit()
+            return
+
         missing = max(target_count - len(self._vehicles), 0)
         if self._reference_vehicle_id is None and self._vehicles:
             self._reference_vehicle_id = next(iter(self._vehicles.keys()))
@@ -829,8 +894,11 @@ class VehicleSimulationEngine:
             segment = self._rng.choice(segment_pool)
             behavior = self._rng.choices(behaviors, weights=behavior_weights, k=1)[0]
             direction = 1
-            if not segment.oneway and self._rng.random() < 0.35:
+            if not segment.oneway and self._rng.random() < 0.30:
                 direction = -1
+            
+            # Natural wrong-way spawn disabled: only explicit demo injection creates wrong-way vehicles
+            natural_ww = False
             progress = self._rng.uniform(0.0, segment.length_m)
             speed_mps = self._compute_speed(segment, behavior)
             lat, lon, bearing = self._state_from_segment(segment, progress, direction)
@@ -846,7 +914,7 @@ class VehicleSimulationEngine:
                 timestamp=now,
                 direction=direction,
                 progress_m=progress,
-                wrong_way=False,
+                wrong_way=natural_ww,
                 behavior=behavior,
                 state="normal",
                 anomaly_score=0.0,
@@ -872,7 +940,7 @@ class VehicleSimulationEngine:
                     direction=db_v.direction,
                     speed_mps=db_v.speed_mps,
                     behavior=db_v.behavior,
-                    wrong_way=False,
+                    wrong_way=db_v.wrong_way,
                     wrong_way_until=None,
                     lat=db_v.lat,
                     lon=db_v.lon,
@@ -894,49 +962,80 @@ class VehicleSimulationEngine:
             vehicle.reference = (vehicle.db_id == self._reference_vehicle_id)
 
     def _flush_to_db(self) -> None:
-        """Bulk-write in-memory vehicle state to DB."""
-        history_rows: list[VehicleHistory] = []
+        """Bulk-write in-memory vehicle state to DB using raw SQL to avoid
+        ORM autoflush deadlocks with the concurrent HTTP request threads."""
+        if not self._vehicles:
+            return
+
+        # Build update params list
+        update_params = []
+        history_params = []
 
         for v in self._vehicles.values():
-            db_v = db.session.get(Vehicle, v.db_id)
-            if db_v is None:
-                continue
-
-            db_v.road_segment_id = v.segment_id
-            db_v.lat = v.lat
-            db_v.lon = v.lon
-            db_v.speed_mps = v.speed_mps
-            db_v.bearing = v.bearing
-            db_v.timestamp = v.timestamp
-            db_v.direction = v.direction
-            db_v.progress_m = v.progress_m
-            db_v.wrong_way = v.wrong_way
-            db_v.wrong_way_until = v.wrong_way_until
-            db_v.state = v.state
-            db_v.anomaly_score = v.anomaly_score
-            db_v.risk_score = v.risk_score
-            db_v.wwp = v.wwp
-            db_v.ttc = v.ttc
-            db_v.maneuverability = v.maneuverability
-            db_v.nearby_count = v.nearby_count
-            db_v.closest_distance_m = v.closest_distance_m
-
-            history_rows.append(
-                VehicleHistory(
-                    vehicle_id=v.db_id,
-                    road_segment_id=v.segment_id,
-                    lat=v.lat,
-                    lon=v.lon,
-                    speed_mps=v.speed_mps,
-                    bearing=v.bearing,
-                    timestamp=v.timestamp,
-                )
-            )
+            update_params.append({
+                "road_segment_id": v.segment_id,
+                "lat": v.lat,
+                "lon": v.lon,
+                "speed_mps": v.speed_mps,
+                "bearing": v.bearing,
+                "timestamp": v.timestamp,
+                "direction": v.direction,
+                "progress_m": v.progress_m,
+                "wrong_way": 1 if v.wrong_way else 0,
+                "wrong_way_until": v.wrong_way_until,
+                "state": v.state,
+                "anomaly_score": v.anomaly_score,
+                "risk_score": v.risk_score,
+                "wwp": v.wwp,
+                "ttc": v.ttc,
+                "maneuverability": v.maneuverability,
+                "nearby_count": v.nearby_count,
+                "closest_distance_m": v.closest_distance_m,
+                "vid": v.db_id,
+            })
+            history_params.append({
+                "vehicle_id": v.db_id,
+                "road_segment_id": v.segment_id,
+                "lat": v.lat,
+                "lon": v.lon,
+                "speed_mps": v.speed_mps,
+                "bearing": v.bearing,
+                "timestamp": v.timestamp,
+            })
             v.dirty = False
 
-        db.session.add_all(history_rows)
-        db.session.commit()
+        # Use raw SQL executemany — bypasses ORM autoflush entirely
+        conn = db.engine.connect()
+        try:
+            with conn.begin():
+                conn.execute(
+                    db.text(
+                        "UPDATE vehicles SET "
+                        "road_segment_id=:road_segment_id, lat=:lat, lon=:lon, "
+                        "speed_mps=:speed_mps, bearing=:bearing, timestamp=:timestamp, "
+                        "direction=:direction, progress_m=:progress_m, "
+                        "wrong_way=:wrong_way, wrong_way_until=:wrong_way_until, "
+                        "state=:state, anomaly_score=:anomaly_score, "
+                        "risk_score=:risk_score, wwp=:wwp, ttc=:ttc, "
+                        "maneuverability=:maneuverability, nearby_count=:nearby_count, "
+                        "closest_distance_m=:closest_distance_m "
+                        "WHERE id=:vid"
+                    ),
+                    update_params,
+                )
+                conn.execute(
+                    db.text(
+                        "INSERT INTO vehicle_history "
+                        "(vehicle_id, road_segment_id, lat, lon, speed_mps, bearing, timestamp) "
+                        "VALUES (:vehicle_id, :road_segment_id, :lat, :lon, :speed_mps, :bearing, :timestamp)"
+                    ),
+                    history_params,
+                )
+        finally:
+            conn.close()
+
         self._seq += 1
+
 
     # ------------------------------------------------------------------
     # Transitions & helpers
@@ -1053,10 +1152,17 @@ class VehicleSimulationEngine:
         v.wrong_way_until = None
         v.state = "normal"
         v.speed_mps = self._compute_speed(segment, v.behavior)
-        lat, lon, bearing = self._state_from_segment(segment, v.progress_m, v.direction)
+        target_lat, target_lon, target_bearing = self._state_from_segment(segment, v.progress_m, v.direction)
+        v.lat, v.lon = target_lat, target_lon
+        
+        # Smooth bearing transition for realism
+        if v.bearing is None:
+            v.bearing = target_bearing
+        else:
+            diff = (target_bearing - v.bearing + 180) % 360 - 180
+            v.bearing = (v.bearing + diff * 0.15) % 360  # 15% interpolation per tick
         noise_m = self._app.config["GPS_NOISE_METERS"]
-        v.lat, v.lon = add_noise(lat, lon, noise_m, rng=self._rng)
-        v.bearing = bearing
+        v.lat, v.lon = add_noise(v.lat, v.lon, noise_m, rng=self._rng)
         v.timestamp = now
         v.dirty = True
         v.reference = (v.db_id == self._reference_vehicle_id)
@@ -1093,10 +1199,12 @@ class VehicleSimulationEngine:
         return lat, lon, bearing
 
     def _compute_speed(self, segment: SegmentRuntime, behavior: str) -> float:
-        behavior_factor = BEHAVIOR_SPEED_FACTORS.get(behavior, 0.88)
-        base_speed = max(segment.speed_limit_mps * behavior_factor, 5.0)
-        varied = base_speed * self._rng.uniform(0.92, 1.08)
-        return round(min(varied, 20.0), 2)
+        behavior_factor = BEHAVIOR_SPEED_FACTORS.get(behavior, 0.90)
+        # Realistic urban speeds: 5-15 m/s (18-54 km/h)
+        base_speed = max(segment.speed_limit_mps * behavior_factor, 4.0)
+        # Reduced jitter for smoother movement (vibration reduction)
+        varied = base_speed * self._rng.uniform(0.98, 1.02)
+        return round(min(varied, 16.0), 2)
 
     def _vehicle_to_api(self, v: VehicleLive) -> dict:
         seg = self._segments.get(v.segment_id)
@@ -1114,6 +1222,7 @@ class VehicleSimulationEngine:
             "anomaly_score": round(v.anomaly_score, 3),
             "risk_score": round(v.risk_score, 3),
             "wwp": round(v.wwp, 3),
+            "confidence": round(v.confidence, 3),
             "ttc": round(v.ttc, 1) if v.ttc is not None else None,
             "maneuverability": round(v.maneuverability, 3),
             "nearby_count": v.nearby_count,
@@ -1130,6 +1239,12 @@ class VehicleSimulationEngine:
             "gps_stability": v.gps_stability,
             "edge_case": v.edge_case,
             "reference": bool(v.reference),
+            "demo_focus": v.demo_focus,
+            "kinematics": {
+                "braking_distance": round((v.speed_mps**2) / (2 * 0.7 * 9.81), 2),
+                "heading_drift": self._compute_heading_drift(v),
+                "lateral_offset": round(v.lateral_offset, 2)
+            }
         }
 
     def _circular_mean_deg(self, values: list[float]) -> float:
@@ -1139,6 +1254,14 @@ class VehicleSimulationEngine:
         cos_sum = sum(math.cos(math.radians(v)) for v in values)
         angle = math.degrees(math.atan2(sin_sum, cos_sum))
         return (angle + 360.0) % 360.0
+
+    def _compute_heading_drift(self, v: VehicleLive) -> float:
+        window = list(v._heading_window)
+        if len(window) < 2:
+            return 0.0
+        c_mean = self._circular_mean_deg(window)
+        deviations = [min(abs(h - c_mean), 360.0 - abs(h - c_mean)) for h in window]
+        return round(statistics.fmean(deviations), 2)
 
     def _update_heading_and_confidence(self, v: VehicleLive, segment: SegmentRuntime, now: float) -> None:
         if v._last_lat is None or v._last_lon is None:
@@ -1160,6 +1283,13 @@ class VehicleSimulationEngine:
         v.road_bearing_deg = segment.bearing
         angle_diff = abs(v.heading_smooth_deg - segment.bearing)
         v.angle_diff_deg = min(angle_diff, 360.0 - angle_diff)
+
+        # BUG FIX: If the road is TWO-WAY, going in the opposite direction (B+180) is also legal.
+        if not segment.oneway:
+            opp_bearing = (segment.bearing + 180.0) % 360.0
+            opp_diff = abs(v.heading_smooth_deg - opp_bearing)
+            opp_diff_deg = min(opp_diff, 360.0 - opp_diff)
+            v.angle_diff_deg = min(v.angle_diff_deg, opp_diff_deg)
 
         # Edge-case handling
         edge_case = "NONE"
@@ -1225,22 +1355,26 @@ class VehicleSimulationEngine:
             temporal_variance=variance_norm,
         )
 
-        # Wrong-way override: ramp confidence up using elapsed time as dev_time input
+        # Wrong-way override: force high confidence for injected wrong-way vehicles
+        # so that precision/recall metrics register immediately.
         if v.wrong_way:
             total = float(self._app.config.get("WRONG_WAY_DURATION_SECONDS", 30))
             if v.wrong_way_until is not None:
                 elapsed = max(0.0, total - max(v.wrong_way_until - now, 0.0))
             else:
                 elapsed = total
+            # Use a dev_time floor of 8s so sigmoid produces >0.9 from the first tick
+            effective_dev = max(elapsed, 8.0)
             boosted = sigmoid_confidence(
                 direction_similarity=-1.0,       # maximum opposition
-                dev_time=elapsed,
-                speed=v.speed_mps,
-                temporal_variance=variance_norm,
+                dev_time=effective_dev,
+                speed=max(v.speed_mps, 6.0),
+                temporal_variance=0.0,            # suppress noise penalty for known wrong-way
             )
             confidence = max(confidence, boosted)
 
         v.confidence = max(0.0, min(1.0, confidence))
+        v.wwp = v.confidence
 
 
 

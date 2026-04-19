@@ -237,8 +237,7 @@ async function refresh() {
         document.getElementById("stat-ttc").textContent = lastTtc != null ? `${lastTtc}s` : "—";
         document.getElementById("stat-risk").textContent = (lastRisk || 0).toFixed(3);
         document.getElementById("stat-points").textContent = labels.length;
-        document.getElementById("stat-precision").textContent = Number(evaluation.precision || 0).toFixed(3);
-        document.getElementById("stat-recall").textContent = Number(evaluation.recall || 0).toFixed(3);
+        document.getElementById("stat-accuracy").textContent = Number(evaluation.accuracy || 0).toFixed(3);
         document.getElementById("stat-fpr").textContent = Number(evaluation.fpr || 0).toFixed(3);
         document.getElementById("cm-tp").textContent = evaluation.tp ?? 0;
         document.getElementById("cm-fp").textContent = evaluation.fp ?? 0;

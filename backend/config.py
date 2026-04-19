@@ -36,6 +36,9 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ENGINE_OPTIONS = {
         "pool_pre_ping": True,
+        # SQLite: 30s busy timeout so concurrent threads queue writes
+        # instead of immediately raising "database is locked"
+        "connect_args": {"timeout": 30, "check_same_thread": False},
     }
 
     FLOWGUARD_PLACE = os.getenv("FLOWGUARD_PLACE", "Chennai, India")

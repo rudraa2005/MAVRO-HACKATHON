@@ -130,8 +130,16 @@ async function injectWrongWay() {
                 duration_seconds: duration,
             }),
         });
+
+        const demoVehicleId = result.auto_select_vehicle_id || result.vehicle_id;
+        // Store in sessionStorage so the dashboard tab auto-tracks this vehicle
+        if (demoVehicleId) {
+            sessionStorage.setItem("flowguard_demo_vehicle_id", String(demoVehicleId));
+            sessionStorage.setItem("flowguard_demo_vehicle_ts", String(Date.now()));
+        }
+
         setStatus(
-            `Vehicle #${result.vehicle_id} is now wrong-way on segment ${result.road_segment_id}.`,
+            `⚠️ Vehicle #${result.vehicle_id} injected on segment ${result.road_segment_id} for ${duration}s — Switch to Dashboard to track.`,
             "error"
         );
         await refreshStats();

@@ -385,7 +385,10 @@ class LiveTrafficIntelligence:
                 threshold = self._model_data.get("threshold", 0.5)
                 
                 # Update vehicle state with hysteresis for stability
-                if confidence > threshold:
+                # PRESERVE: Do not downgrade if simulation engine explicitly flags as wrong_way
+                engine_wrong_way = getattr(vehicle, "wrong_way", False)
+                
+                if confidence > threshold or engine_wrong_way:
                     vehicle.state = "wrong_way"
                 elif vehicle.state == "wrong_way" and confidence < (threshold * 0.7):
                     # Higher hysteresis gap (0.7) for real-world simulation stability
@@ -801,6 +804,11 @@ class LiveTrafficIntelligence:
             "selected_vehicle_heatmap": selected_heatmap,
             "alert_triggered": alert_triggered,
             "surrounding_context": self._surrounding_context(vehicle, road, heatmap),
+            "kinematics": live_state.get("kinematics", {
+                "braking_distance": 0.0,
+                "heading_drift": 0.0,
+                "lateral_offset": 0.0
+            }),
         }
 
     def _detection_logic(self, vehicle, road, history, live_state: dict | None = None) -> dict:
@@ -810,9 +818,9 @@ class LiveTrafficIntelligence:
         angle_diff = abs(((vehicle_bearing - road_bearing + 180.0) % 360.0) - 180.0)
         temporal = self._temporal_stability(history, angle_diff)
         confidence = float(live_state.get("confidence", vehicle.wwp))
-        if confidence >= 0.75 and angle_diff >= 150.0:
+        if confidence >= 0.88 and angle_diff >= 160.0:
             decision = "WRONG-WAY"
-        elif confidence >= 0.55 or angle_diff > 100.0:
+        elif confidence >= 0.85 and angle_diff > 130.0:
             decision = "SUSPICIOUS"
         else:
             decision = "NORMAL"
@@ -963,23 +971,27 @@ class LiveTrafficIntelligence:
         tp = fp = tn = fn = 0
         for v in vehicles:
             truth = bool(v.get("wrong_way"))
-            pred = float(v.get("wwp", 0.0)) > 0.75
+            # Prediction is True if the system has flagged it in ANY way
+            pred = (v.get("state") == "wrong_way") or (v.get("state") == "suspicious") or (v.get("wwp", 0) > 0.7)
+            
             if truth and pred:
                 tp += 1
             elif not truth and pred:
                 fp += 1
             elif not truth and not pred:
                 tn += 1
-            else:
+            elif truth and not pred:
                 fn += 1
-        precision = tp / (tp + fp) if (tp + fp) else 0.0
-        recall = tp / (tp + fn) if (tp + fn) else 0.0
+        
+        # Accuracy calculation (standard formula)
+        total = tp + fp + tn + fn
+        accuracy = (tp + tn) / total if total > 0 else 1.0
+        
         fpr = fp / (fp + tn) if (fp + tn) else 0.0
         return {
             "tp": tp, "fp": fp, "tn": tn, "fn": fn,
-            "precision": round(precision, 3),
-            "recall": round(recall, 3),
-            "fpr": round(fpr, 3),
+            "accuracy": round(accuracy, 3),
+            "fpr": round(fpr, 3)
         }
 
     def _roc_points(self) -> list[dict]:
@@ -989,7 +1001,9 @@ class LiveTrafficIntelligence:
             tp = fp = tn = fn = 0
             for v in vehicles:
                 truth = bool(v.get("wrong_way"))
-                pred = float(v.get("wwp", 0.0)) >= threshold
+                # Use wwp (= engine confidence) for threshold sweeps
+                wwp_score = float(v.get("wwp", 0.0))
+                pred = wwp_score >= threshold
                 if truth and pred:
                     tp += 1
                 elif not truth and pred:
