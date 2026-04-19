@@ -197,11 +197,22 @@ function renderVehicles(vehicles, enhancedTelemetry = {}) {
                 weight: strokeWeight,
                 className: enhanced.intent_classification === "PANICKED" ? "pulse-red" : ""
             }).addTo(state.vehicleLayer);
+            
+            // Ensure interactive and clickable
+            marker.bringToFront();
 
-            marker.on("click", () => {
+            marker.on("click", (e) => {
+                L.DomEvent.stopPropagation(e); // prevent map click
+                // Immediately select and lock to this vehicle
                 state.selectedVehicleId = v.id;
+                state._manualSelection = true;  // prevent auto-override for 10s
+                state._manualSelectionExpiry = Date.now() + 10000;
+                // Re-style all markers immediately
                 renderVehicles(state.latestVehicles, state.latestAnalysis?.enhanced_telemetry);
+                // Fetch fresh panel data
                 refreshAnalysis();
+                // Pan camera to vehicle
+                if (state.map) state.map.panTo(pos);
             });
             state.vehicleMarkers.set(v.id, marker);
         }
@@ -809,12 +820,33 @@ async function refreshSnapshot() {
         renderVehicles(vehicles, analysis?.enhanced_telemetry);
         renderAnalysis(analysis);
 
-        // Auto-select demo focused vehicle
+        // Auto-select/follow demo focused vehicle (wrong-way inject)
         const demoV = vehicles.find(v => v.demo_focus === true);
-        if (demoV && !state.selectedVehicleId) {
-            state.selectedVehicleId = demoV.id;
-            console.log(`Auto-selecting demo vehicle #${demoV.id}`);
+        const manualStillActive = state._manualSelection && Date.now() < (state._manualSelectionExpiry || 0);
+
+        // Check sessionStorage for cross-tab vehicle injection signal (from Control page)
+        const storedDemoId = sessionStorage.getItem("flowguard_demo_vehicle_id");
+        const storedDemoTs = Number(sessionStorage.getItem("flowguard_demo_vehicle_ts") || 0);
+        const storedDemoFresh = storedDemoId && (Date.now() - storedDemoTs) < 60000; // valid for 60s
+        if (storedDemoFresh && !manualStillActive) {
+            const storedVehicle = vehicles.find(v => String(v.id) === storedDemoId);
+            if (storedVehicle && state.selectedVehicleId !== storedVehicle.id) {
+                state.selectedVehicleId = storedVehicle.id;
+                console.log(`Cross-tab: auto-tracking injected vehicle #${storedVehicle.id}`);
+            }
         }
+
+        if (demoV && !manualStillActive) {
+            if (state.selectedVehicleId !== demoV.id) {
+                state.selectedVehicleId = demoV.id;
+                console.log(`Auto-tracking demo vehicle #${demoV.id}`);
+            }
+            // Camera follow wrong-way vehicle
+            if (state.map) {
+                state.map.panTo([demoV.lat, demoV.lon], { animate: true, duration: 0.5 });
+            }
+        }
+
 
         if (!summary.has_data) {
             showEmptyState(true);

@@ -260,6 +260,10 @@ a:hover {
     border: 1px solid var(--panel-border);
 }
 
+.leaflet-interactive {
+    cursor: pointer !important;
+}
+
 .selected-heatmap-card {
     padding: 10px;
     border-radius: 12px;
